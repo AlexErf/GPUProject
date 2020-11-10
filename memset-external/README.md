@@ -19,7 +19,7 @@ It works by
 12. It gets the results out by mapping the GPU memory into the host's virtual address space (One should be able to copy the results from GPU to CPU memory as well).
 
 # To Build
-Use the associated `Makefile`. You should be able to use your version of `clang` provided earlier. It also appears to work with the system default `clang` as well, which is cool. You should also be able to use ROCm's script to independently compile OpenCL kernels (found in `/opt/rocm/bin/clang-ocl`, usage is like: `clang-ocl main.cl -o kernel.exe`).
+Use the associated `Makefile`. You should be able to use your version of `clang` provided earlier. It also appears to work with the system default `clang` as well, which is cool. You should also be able to use ROCm's script to independently compile OpenCL kernels (found in `/opt/rocm/bin/clang-ocl`, usage is like: `clang-ocl -mcpu=gfx1010 main.cl -o kernel.exe`. The `gfx1010` is the name of my GPU.)
 
 ## Compiling the host code
 `make main.exe` will do the trick.
