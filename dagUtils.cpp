@@ -1,27 +1,73 @@
-static void computeEstart(map<SUnit*, int> &estart, SUnit* node) {
-  if (node->NumPreds == 0) {
-    estart[node] = 0;
+static map<SUnit*, int> computeEstart(deque<SUnit*> nodes) {
+  map<SUnit*, int> estart;
+
+  while (!nodes.empty()) {
+    SUnit* node = nodes.pop_front();
+    if (node->NumPreds == 0) {
+      estart[node] = 0;
+    }
+    else {
+      SmallVector<SDep, 4> preds = node->Preds;
+      int maxVal = 0;
+      bool allPreds = true;
+      for (auto it = preds.begin(); it != preds.end(); ++it) {
+        if (estart.find(it->getSUnit()) == estart.end()) {
+          allPreds = false;
+          break;
+        }
+        maxVal = max(maxVal, estart[it->getSUnit()] + it->getLatency());
+      }
+      if (allPreds) {
+        estart[node] = maxVal;
+        SmallVector<SDep, 4> succs = node->Succs;
+        for (auto it =  succs.begin(); it != succs.end(); ++it) {
+          if (find(nodes.begin(), nodes.end(), *it) == nodes.end()) 
+            nodes.push_back(*it);
+        }
+      }
+      else {
+        nodes.push_back(node);
+      }
+    }
   }
-  else {
-    SmallVector<SDep, 4> preds = node->Preds;
-    int maxVal = 0;
-    for (auto it = preds.begin(); it != preds.end(); ++it) 
-      maxVal = max(maxVal, estart[it->getSUnit()] + it->getLatency());
-    estart[node] = maxVal;
-  }
+  
+  return estart;
 }
 
-static void computeLstart(map<SUnit*, int> &lstart, SUnit* node, int maxEstart) {
-  if (node->NumSuccs == 0) {
-    lstart[node] = maxEstart;
+static map<SUnit*, int> computeLstart(deque<SUnit*> nodes, int maxEstart) {
+  map<SUnit*, int> lstart;
+
+   while (!nodes.empty()) {
+    SUnit* node = nodes.pop_front();
+    if (node->NumSuccs == 0) {
+      lstart[node] = maxEstart;
+    }
+    else {
+      SmallVector<SDep, 4> succs = node->Succs;
+      int minVal = 0;
+      bool allSuccs = true;
+      for (auto it = succs.begin(); it != succs.end(); ++it) {
+        if (lstart.find(it->getSUnit()) == lstart.end()) {
+          allSuccs = false;
+          break;
+        }
+        minVal = min(minVal, lstart[it->getSUnit()] - it->getLatency());
+      }
+      if (allSuccs) {
+        lstart[node] = minVal;
+        SmallVector<SDep, 4> preds = node->Preds;
+        for (auto it =  preds.begin(); it != preds.end(); ++it) {
+          if (find(nodes.begin(), nodes.end(), *it) == nodes.end()) 
+            nodes.push_back(*it);
+        }
+      }
+      else {
+        nodes.push_back(node);
+      }
+    }
   }
-  else {
-    SmallVector<SDep, 4> succs = node->Succs;
-    int minVal = 0;
-    for (auto it = succs.begin(); it != succs.end(); ++it) 
-      minVal = min(minVal, lstart[it->getSUnit()] - it->getLatency());
-    lstart[node] = minVal;
-  }
+
+  return lstart;
 }
 
 bool cmp(pair<SUnit*, int> &a, pair<SUnit*, int> &b) { 
@@ -33,15 +79,14 @@ static int computeDLB(SmallVector<SUnit*, 8> topRoots, SmallVector<SUnit*, 8> bo
   map<SUnit*, int> lstart;
 
   // 3. compute ASAP/estart and ALAP/lstart for each SUnit/node
-  for (auto it = topRoots.begin(); it != topRoots.end(); ++it) 
-    computeEstart(estart, *it);
+  queue<SUnit*> nodes(topRoots.begin(), topRoots.end());
+  max<SUnit*, int> estart = computeEstart(nodes);
 
   int maxEstart = 0;
   for (auto it = estart.begin(); it != estart.end(); ++it) 
     maxEstart = max(maxEstart, it->second);
 
-  for (auto it = botRoots.begin(); it != botRoots.end(); ++it) 
-    computeLstart(lstart, *it, maxEstart);
+  max<SUnit*, int> lstart = computeLstart(nodes, maxEstart);
 
   // 4. sort operations in order of increasing ALAP
   set<pair<SUnit*, int>, cmp> ops(lstart.begin(), lstart.end()); 
