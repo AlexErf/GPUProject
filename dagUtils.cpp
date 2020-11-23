@@ -1,5 +1,12 @@
-static map<SUnit*, int> computeEstart(deque<SUnit*> nodes) {
-  map<SUnit*, int> estart;
+#include <deque>
+#include <map> 
+#include "llvm/CodeGen/ScheduleDAG.h"
+
+using namespace llvm;
+
+
+static std::map<SUnit*, int> computeEstart(std::deque<SUnit*> nodes) {
+  std::map<SUnit*, int> estart;
 
   while (!nodes.empty()) {
     SUnit* node = nodes.pop_front();
@@ -22,7 +29,7 @@ static map<SUnit*, int> computeEstart(deque<SUnit*> nodes) {
         SmallVector<SDep, 4> succs = node->Succs;
         for (auto it =  succs.begin(); it != succs.end(); ++it) {
           if (find(nodes.begin(), nodes.end(), *it) == nodes.end()) 
-            nodes.push_back(*it);
+            nodes.push_back(it->getSUnit());
         }
       }
       else {
@@ -34,8 +41,8 @@ static map<SUnit*, int> computeEstart(deque<SUnit*> nodes) {
   return estart;
 }
 
-static map<SUnit*, int> computeLstart(deque<SUnit*> nodes, int maxEstart) {
-  map<SUnit*, int> lstart;
+static std::map<SUnit*, int> computeLstart(std::deque<SUnit*> nodes, int maxEstart) {
+  std::map<SUnit*, int> lstart;
 
    while (!nodes.empty()) {
     SUnit* node = nodes.pop_front();
@@ -58,7 +65,7 @@ static map<SUnit*, int> computeLstart(deque<SUnit*> nodes, int maxEstart) {
         SmallVector<SDep, 4> preds = node->Preds;
         for (auto it =  preds.begin(); it != preds.end(); ++it) {
           if (find(nodes.begin(), nodes.end(), *it) == nodes.end()) 
-            nodes.push_back(*it);
+            nodes.push_back(it->getSUnit());
         }
       }
       else {
@@ -75,8 +82,8 @@ bool cmp(pair<SUnit*, int> &a, pair<SUnit*, int> &b) {
 } 
 
 static int computeDLB(SmallVector<SUnit*, 8> topRoots, SmallVector<SUnit*, 8> botRoots) {
-  map<SUnit*, int> estart;
-  map<SUnit*, int> lstart;
+  std::map<SUnit*, int> estart;
+  std::map<SUnit*, int> lstart;
 
   // 3. compute ASAP/estart and ALAP/lstart for each SUnit/node
   queue<SUnit*> nodes(topRoots.begin(), topRoots.end());
@@ -92,7 +99,7 @@ static int computeDLB(SmallVector<SUnit*, 8> topRoots, SmallVector<SUnit*, 8> bo
   set<pair<SUnit*, int>, cmp> ops(lstart.begin(), lstart.end()); 
 
   // 5. schedule each operation
-  map<int, SUnit*> schedule;
+  std::map<int, SUnit*> schedule;
   int maxDelay = 0;
   for (auto it = ops.begin(); it != ops.end(); ++it) {
     int opTime = estart[it->first];
