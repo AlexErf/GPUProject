@@ -79,6 +79,7 @@ int main(int argc, char ** argv)
   // 4. Perform runtime source compilation, and obtain kernel entry point.
   const unsigned char* binary = bytes;
   cl_int binary_status = 0, error_status = 0;
+  while(1) {
   cl_program program = clCreateProgramWithBinary( context,
                                                     1,
                                                     &device,
@@ -125,6 +126,7 @@ int main(int argc, char ** argv)
       exit(1);
   }
 
+  std::cout << "Building kernel" << std::endl;
   cl_kernel kernel = clCreateKernel( program, "memset", NULL );
 
   // 5. Create a data buffer.
@@ -137,6 +139,7 @@ int main(int argc, char ** argv)
   size_t global_work_size = NWITEMS;
   clSetKernelArg(kernel, 0, sizeof(buffer), (void*) &buffer);
 
+  std::cout << "Running kernel" << std::endl;
   clEnqueueNDRangeKernel( queue,
                           kernel,
                           1,
@@ -146,8 +149,10 @@ int main(int argc, char ** argv)
                           0,
                           NULL, NULL);
 
+  std::cout << "waiting for kernel" << std::endl;
   clFinish( queue );
 
+  std::cout << "mapping results" << std::endl;
   // 7. Look at the results via synchronous buffer map.
   cl_uint *ptr;
   ptr = (cl_uint *) clEnqueueMapBuffer( queue,
@@ -163,5 +168,6 @@ int main(int argc, char ** argv)
   for(i=0; i < NWITEMS; i++)
       printf("%d %d\n", i, ptr[i]);
 
+  }
   return 0;
 }
