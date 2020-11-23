@@ -1,5 +1,6 @@
 #include <deque>
 #include <map> 
+#include <set>
 #include "llvm/CodeGen/ScheduleDAG.h"
 
 using namespace llvm;
@@ -96,7 +97,7 @@ static int computeDLB(SmallVector<SUnit*, 8> topRoots, SmallVector<SUnit*, 8> bo
   max<SUnit*, int> lstart = computeLstart(nodes, maxEstart);
 
   // 4. sort operations in order of increasing ALAP
-  set<pair<SUnit*, int>, cmp> ops(lstart.begin(), lstart.end()); 
+  std::set<pair<SUnit*, int>, cmp> ops(lstart.begin(), lstart.end()); 
 
   // 5. schedule each operation
   std::map<int, SUnit*> schedule;
