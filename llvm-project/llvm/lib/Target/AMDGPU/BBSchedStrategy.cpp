@@ -341,8 +341,13 @@ void GCNScheduleDAGMILive::ilpPass(std::vector<SUnit* > topRoots, std::vector<SU
   }
 }
 
-void GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BotRoots, unsigned targetLength, unsigned targetAPRP)
+void GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BottomRoots,
+                                      unsigned targetLength, unsigned targetAPRP, bool isOccupanyPass)
 {
+
+  // should set regionEnd to regionStart, so we can build our own schedule (store original regionEnd)
+  // keep a stack of ready queues so that we can backtrack effectively
+  // keep a list of instructions (SUnit) that have been scheduled
   bool targetsMet = false;
   auto bestAPRP = getRealRegPressure(); // need to call differently to specify region?  also need to convert to APRP?
   ReadyQueue nodesToAdd(1, "MyReadyQueue");
@@ -355,8 +360,14 @@ void GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVecto
     SUnit* s = *nodesToAdd.begin();
     nodesToAdd.remove(nodesToAdd.begin());
     scheduleMI(s, false); // add node to the bottom
-    if (checkNode(/* node? */targetLength, targetAPRP))
+
+    // 1. don't call scheduleMI, but schedule instructions in the BB (see end of schedule function)
+    // 2. ensure that RegionStart and RegionEnd are updated prior to checkNode call
+    if (checkNode(targetLength, targetAPRP, SmallVector<SUnit*, 8> TopRoots,
+              SmallVector<SUnit*, 8> BottomRoots, const std::vector<SUnit*>& scheduledInstructions, bool isOccupanyPass))
     {
+
+
       // still promising, add successors to ready queue (not sure if this is best/right way to proceed)
       for (auto dep: s.Succs)
       {
