@@ -861,3 +861,158 @@ static int satisfyLatency(std::vector<SUnit*> schedule) {
     }
     return current_cycle;
 }
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+static std::map<SUnit*, int> computeEstart(std::deque<SUnit*> nodes) {
+  std::map<SUnit*, int> estart;
+
+  while (!nodes.empty()) {
+    SUnit* node = nodes.pop_front();
+    if (node->NumPreds == 0) {
+      estart[node] = 0;
+    }
+    else {
+      SmallVector<SDep, 4> preds = node->Preds;
+      int maxVal = 0;
+      bool allPreds = true;
+      for (auto it = preds.begin(); it != preds.end(); ++it) {
+        if (estart.find(it->getSUnit()) == estart.end()) {
+          allPreds = false;
+          break;
+        }
+        maxVal = max(maxVal, estart[it->getSUnit()] + it->getLatency());
+      }
+      if (allPreds) {
+        estart[node] = maxVal;
+        SmallVector<SDep, 4> succs = node->Succs;
+        for (auto it =  succs.begin(); it != succs.end(); ++it) {
+          if (find(nodes.begin(), nodes.end(), *it) == nodes.end()) 
+            nodes.push_back(it->getSUnit());
+        }
+      }
+      else {
+        nodes.push_back(node);
+      }
+    }
+  }
+  
+  return estart;
+}
+
+static std::map<SUnit*, int> computeLstart(std::deque<SUnit*> nodes, int maxEstart) {
+  std::map<SUnit*, int> lstart;
+
+   while (!nodes.empty()) {
+    SUnit* node = nodes.pop_front();
+    if (node->NumSuccs == 0) {
+      lstart[node] = maxEstart;
+    }
+    else {
+      SmallVector<SDep, 4> succs = node->Succs;
+      int minVal = 0;
+      bool allSuccs = true;
+      for (auto it = succs.begin(); it != succs.end(); ++it) {
+        if (lstart.find(it->getSUnit()) == lstart.end()) {
+          allSuccs = false;
+          break;
+        }
+        minVal = min(minVal, lstart[it->getSUnit()] - it->getLatency());
+      }
+      if (allSuccs) {
+        lstart[node] = minVal;
+        SmallVector<SDep, 4> preds = node->Preds;
+        for (auto it =  preds.begin(); it != preds.end(); ++it) {
+          if (find(nodes.begin(), nodes.end(), *it) == nodes.end()) 
+            nodes.push_back(it->getSUnit());
+        }
+      }
+      else {
+        nodes.push_back(node);
+      }
+    }
+  }
+
+  return lstart;
+}
+
+bool cmp(pair<SUnit*, int> &a, pair<SUnit*, int> &b) { 
+  return a.second < b.second; 
+} 
+
+static int computeDLB(std::map<int, SUnit*> scheduleSoFar, std::map<SUnit*, int> estart, std::map<SUnit*, int> lstart) {
+  std::map<SUnit*, int> tempLstart;
+  for (auto it = scheduleSoFar.begin(); it != scheduleSoFar.end(); ++it) {
+    tempLstart[it->second] = lstart[it->second];
+  }
+
+  // 4. sort operations in order of increasing ALAP
+  std::set<pair<SUnit*, int>, cmp> ops(tempLstart.begin(), tempLstart.end()); 
+
+  // 5. schedule each operation
+  std::map<int, SUnit*> schedule;
+  int maxDelay = 0;
+  for (auto it = ops.begin(); it != ops.end(); ++it) {
+    int opTime = estart[it->first];
+
+    while (true) {
+      if (schedule.find(opTime) == schedule.end()) {
+        schedule[opTime] = it->first;
+        break;
+      }
+      ++opTime;
+    }
+
+    maxDelay = max(maxDelay, opTime - lstart[it->first]);
+  }
+
+  // 6. dynamic lower bound = maxDelay + criticalPathDelay
+  int criticalPathDelay = schedule.rbegin()->first;
+
+  return maxDelay + criticalPathDelay;
+}
+
+
+static bool checkNode(SUnit* node, 
+                      std::map<SUnit*, int> estart,
+                      std::map<SUnit*, int> lstart,
+                      std::map<int, SUnit*> scheduleSoFar,
+                      int targetLength, 
+                      unsigned targetAPRP, 
+                      unsigned enumBestAPRP, 
+                      std::string passName) {
+  // 1. tighten scheduling ranges - only needed during the ilp pass
+  if (passName == "ilp") {
+    // check that there is at least one cycle time within [estart, lstart] that does not have an instruction scheduled
+    bool freeCycle = false;
+    for (int i = estart[node]; i <= lstart[node]; ++i) {
+      if (scheduleSoFar.find(i) == scheduleSoFar.end()) {
+        freeCycle = true;
+        break;
+      }
+    }
+    if (!freeCycle) {
+      return false;
+    }
+  }
+
+  // 2. dynamic lower bound - only needed during the ilp pass
+  if (passName == "ilp") {
+    // satisfy latencies on the schedule so far
+    // determine how many cycles the schedule so far takes up and how many remain assuming a total number of cycles equal to targetLength
+    unsigned lengthSoFar = computeDLB(scheduleSoFar, estart, lstart);
+    if (lengthSoFar > targetLength) {
+      return false;
+    }
+  }
+
+  // 3. check history??? - SKIP FOR NOW
+
+  // 4. compute aprp
+  unsigned aprp = getRealRegPressure().getVGPRNum();
+
+  // 5. wrap up stuff
+  if (passName == "occupancy")
+    return aprp < enumBestAPRP;
+  else
+    return aprp < targetAPRP;
+}
