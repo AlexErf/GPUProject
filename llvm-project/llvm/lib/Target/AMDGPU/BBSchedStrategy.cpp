@@ -341,6 +341,42 @@ void GCNScheduleDAGMILive::ilpPass(std::vector<SUnit* > topRoots, std::vector<SU
   }
 }
 
+void GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BotRoots, unsigned targetLength, unsigned targetAPRP)
+{
+  bool targetsMet = false;
+  auto bestAPRP = getRealRegPressure(); // need to call differently to specify region?  also need to convert to APRP?
+  ReadyQueue nodesToAdd(1, "MyReadyQueue");
+  for (SUnit* s: TopRoots)
+  {
+    nodesToAdd.push(s);
+  } // add possible starting SUnits
+  while (!nodesToAdd.empty() && !targetsMet) // correct condition?
+  {
+    SUnit* s = *nodesToAdd.begin();
+    nodesToAdd.remove(nodesToAdd.begin());
+    scheduleMI(s, false); // add node to the bottom
+    if (checkNode(/* node? */targetLength, targetAPRP))
+    {
+      // still promising, add successors to ready queue (not sure if this is best/right way to proceed)
+      for (auto dep: s.Succs)
+      {
+        nodesToAdd.push(dep.getSUnit());
+      }
+    }
+    else
+    {
+      unscheduleMI(s, false);
+    }
+  }
+}
+
+// Not sure if parameters are correct/necessary
+// See ScheduleDAGMILive:scheduleMI
+void GCNScheduleDAGMILive::unscheduleMI(SUnit *SU, bool isTopNode)
+{
+  // TODO
+}
+
 void GCNScheduleDAGMILive::schedule() {
     /*
      * TODO: actually implement this
