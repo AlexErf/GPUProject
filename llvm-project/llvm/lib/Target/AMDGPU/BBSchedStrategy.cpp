@@ -966,7 +966,7 @@ static int computeDLB(std::map<int, SUnit*> scheduleSoFar, std::map<SUnit*, int>
   }
 
   // 6. dynamic lower bound = maxDelay + criticalPathDelay
-  int criticalPathDelay = schedule.rbegin()->first;
+  int criticalPathDelay = tempLstart.rbegin()->second;
 
   return maxDelay + criticalPathDelay;
 }
