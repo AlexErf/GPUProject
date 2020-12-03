@@ -1,4 +1,4 @@
-//===-- GCNSchedStrategy.h - GCN Scheduler Strategy -*- C++ -*-------------===//
+//===-- BBSchedStrategy.h - BB Scheduler Strategy -*- C++ -*-------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -10,8 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIB_TARGET_AMDGPU_GCNSCHEDSTRATEGY_H
-#define LLVM_LIB_TARGET_AMDGPU_GCNSCHEDSTRATEGY_H
+#ifndef LLVM_LIB_TARGET_AMDGPU_BBSCHEDSTRATEGY_H
+#define LLVM_LIB_TARGET_AMDGPU_BBSCHEDSTRATEGY_H
 
 #include "GCNRegPressure.h"
 #include "llvm/CodeGen/MachineScheduler.h"
@@ -26,7 +26,7 @@ class GCNSubtarget;
 /// and the GenericScheduler is that GCNSchedStrategy uses different
 /// heuristics to determine excess/critical pressure sets.  Its goal is to
 /// maximize kernel occupancy (i.e. maximum number of waves per simd).
-class GCNMaxOccupancySchedStrategy final : public GenericScheduler {
+class GCNSchedStrategy final : public GenericScheduler {
   friend class GCNScheduleDAGMILive;
 
   SUnit *pickNodeBidirectional(bool &IsTopNode);
@@ -52,8 +52,23 @@ class GCNMaxOccupancySchedStrategy final : public GenericScheduler {
 
   MachineFunction *MF;
 
+  std::map<SUnit*, int> estart;
+  std::map<SUnit*, int> lstart;
+
+protected:  
+
+  void BBSchedStrategy::computeEstart(SmallVector<SUnit*, 8> topRoots);
+
+  void BBSchedStrategy::computeLstart(SmallVector<SUnit*, 8> bottomRoots, int maxEstart);
+
+  bool BBSchedStrategy::cmp(pair<SUnit*, int> &a, pair<SUnit*, int> &b);
+
+  unsigned BBSchedStrategy::computeDLB(std::map<int, SUnit*> scheduleSoFar);
+
+  bool BBSchedStrategy::checkNode(std::map<SUnit*, int> scheduleSoFar, unsigned targetLength, unsigned targetAPRP, 
+                                  unsigned enumBestAPRP, bool isOccupancyPass);
 public:
-  GCNMaxOccupancySchedStrategy(const MachineSchedContext *C);
+  BBSchedStrategy(const MachineSchedContext *C);
 
   SUnit *pickNode(bool &IsTopNode) override;
 
@@ -114,6 +129,11 @@ class GCNScheduleDAGMILive final : public ScheduleDAGMILive {
   // Compute and cache live-ins and pressure for all regions in block.
   void computeBlockPressure(const MachineBasicBlock *MBB);
 
+  void GCNScheduleDAGMILive::occupancyPass(std::vector<SUnit* > topRoots, int targetPressure);
+  void GCNScheduleDAGMILive::ilpPass(std::vector<SUnit* > topRoots, std::vector<SUnit* > scheduleInst, int targetPressure);
+  int GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BottomRoots,
+                                      unsigned targetLength, unsigned targetAPRP, bool isOccupanyPass);
+  void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI);
 
 public:
   GCNScheduleDAGMILive(MachineSchedContext *C,
@@ -126,4 +146,4 @@ public:
 
 } // End namespace llvm
 
-#endif // GCNSCHEDSTRATEGY_H
+#endif // BBSCHEDSTRATEGY_H

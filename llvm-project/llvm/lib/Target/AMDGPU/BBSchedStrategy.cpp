@@ -11,7 +11,7 @@
 /// occupancy on GCN hardware.
 //===----------------------------------------------------------------------===//
 
-#include "BBSchedStrategy.h"
+#include "GCNSchedStrategy.h"
 #include "AMDGPUSubtarget.h"
 #include "SIInstrInfo.h"
 #include "SIMachineFunctionInfo.h"
@@ -19,16 +19,20 @@
 #include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/Support/MathExtras.h"
+#include <queue>
+#include <stack>
+#include <map>
+#include <deque>
 
 #define DEBUG_TYPE "machine-scheduler"
 
 using namespace llvm;
 
-GCNMaxOccupancySchedStrategy::GCNMaxOccupancySchedStrategy(
+GCNSchedStrategy::GCNSchedStrategy(
     const MachineSchedContext *C) :
     GenericScheduler(C), TargetOccupancy(0), MF(nullptr) { }
 
-void GCNMaxOccupancySchedStrategy::initialize(ScheduleDAGMI *DAG) {
+void GCNSchedStrategy::initialize(ScheduleDAGMI *DAG) {
   GenericScheduler::initialize(DAG);
 
   const SIRegisterInfo *SRI = static_cast<const SIRegisterInfo*>(TRI);
@@ -59,7 +63,7 @@ void GCNMaxOccupancySchedStrategy::initialize(ScheduleDAGMI *DAG) {
   VGPRCriticalLimit -= ErrorMargin;
 }
 
-void GCNMaxOccupancySchedStrategy::initCandidate(SchedCandidate &Cand, SUnit *SU,
+void GCNSchedStrategy::initCandidate(SchedCandidate &Cand, SUnit *SU,
                                      bool AtTop, const RegPressureTracker &RPTracker,
                                      const SIRegisterInfo *SRI,
                                      unsigned SGPRPressure,
@@ -141,7 +145,7 @@ void GCNMaxOccupancySchedStrategy::initCandidate(SchedCandidate &Cand, SUnit *SU
 
 // This function is mostly cut and pasted from
 // GenericScheduler::pickNodeFromQueue()
-void GCNMaxOccupancySchedStrategy::pickNodeFromQueue(SchedBoundary &Zone,
+void GCNSchedStrategy::pickNodeFromQueue(SchedBoundary &Zone,
                                          const CandPolicy &ZonePolicy,
                                          const RegPressureTracker &RPTracker,
                                          SchedCandidate &Cand) {
@@ -170,7 +174,7 @@ void GCNMaxOccupancySchedStrategy::pickNodeFromQueue(SchedBoundary &Zone,
 
 // This function is mostly cut and pasted from
 // GenericScheduler::pickNodeBidirectional()
-SUnit *GCNMaxOccupancySchedStrategy::pickNodeBidirectional(bool &IsTopNode) {
+SUnit *GCNSchedStrategy::pickNodeBidirectional(bool &IsTopNode) {
   // Schedule as far as possible in the direction of no choice. This is most
   // efficient, but also provides the best heuristics for CriticalPSets.
   if (SUnit *SU = Bot.pickOnlyChoice()) {
@@ -247,7 +251,7 @@ SUnit *GCNMaxOccupancySchedStrategy::pickNodeBidirectional(bool &IsTopNode) {
 
 // This function is mostly cut and pasted from
 // GenericScheduler::pickNode()
-SUnit *GCNMaxOccupancySchedStrategy::pickNode(bool &IsTopNode) {
+SUnit *GCNSchedStrategy::pickNode(bool &IsTopNode) {
   if (DAG->top() == DAG->bottom()) {
     assert(Top.Available.empty() && Top.Pending.empty() &&
            Bot.Available.empty() && Bot.Pending.empty() && "ReadyQ garbage");
@@ -327,7 +331,7 @@ GCNScheduleDAGMILive::GCNScheduleDAGMILive(MachineSchedContext *C,
 
 void GCNScheduleDAGMILive::occupancyPass(std::vector<SUnit* > topRoots, int targetPressure) {
   std::map<SUnit*, node> mapSUnitToNode = setLatenciesToOne(topRoots);
-  // enumerate();
+  enumerate();
   restoreLatencies(topRoots, mapSUnitToNode);
 }
 
@@ -341,51 +345,146 @@ void GCNScheduleDAGMILive::ilpPass(std::vector<SUnit* > topRoots, std::vector<SU
   }
 }
 
-void GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BottomRoots,
+/// schedule a instruction to RegionEnd pointer
+/// move teh RegionEnd pointer to the next inst
+void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI) {
+  if (MI->isDebugInstr())
+    continue;
+
+  if (MI->getIterator() != RegionEnd) {
+    BB->remove(MI);
+    BB->insert(RegionEnd, MI);
+    if (!MI->isDebugInstr())
+      LIS->handleMove(*MI, true);
+  }
+  // Reset read-undef flags and update them later.
+  for (auto &Op : MI->operands())
+    if (Op.isReg() && Op.isDef())
+      Op.setIsUndef(false);
+  RegisterOperands RegOpers;
+  RegOpers.collect(*MI, *TRI, MRI, ShouldTrackLaneMasks, false);
+  if (!MI->isDebugInstr()) {
+    if (ShouldTrackLaneMasks) {
+      // Adjust liveness and add missing dead+read-undef flags.
+      SlotIndex SlotIdx = LIS->getInstructionIndex(*MI).getRegSlot();
+      RegOpers.adjustLaneLiveness(*LIS, MRI, SlotIdx, MI);
+    } else {
+      // Adjust for missing dead-def flags.
+      RegOpers.detectDeadDefs(*MI, *LIS);
+    }
+  }
+  RegionEnd = MI->getIterator();
+  ++RegionEnd;
+  LLVM_DEBUG(dbgs() << "Scheduling " << *MI);
+}
+
+unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BottomRoots,
                                       unsigned targetLength, unsigned targetAPRP, bool isOccupanyPass)
 {
 
   // should set regionEnd to regionStart, so we can build our own schedule (store original regionEnd)
   // keep a stack of ready queues so that we can backtrack effectively
   // keep a list of instructions (SUnit) that have been scheduled
-  bool targetsMet = false;
-  auto bestAPRP = getRealRegPressure(); // need to call differently to specify region?  also need to convert to APRP?
-  ReadyQueue nodesToAdd(1, "MyReadyQueue");
+  bool foundBetterSchedule = false;
+  auto bestAPRP = getRealRegPressure().getVGPRNum(); // need to call differently to specify region?  also need to convert to APRP?
+  // ReadyQueue nodesToAdd(1, "MyReadyQueue");
+  std::stack<std::queue<SUnit*>> readyNodeStack;
+  std::stack<std::set<SUnit*>> availableNodeStack;
+  std::vector<SUnit*> bestScheduledInstructions;
+  std::vector<SUnit*> currentScheduledInstructions;
+  readyNodeStack.emplace();
+  availableNodeStack.emplace();
+
   for (SUnit* s: TopRoots)
   {
-    nodesToAdd.push(s);
+    // nodesToAdd.push(s);
+    readyNodeStack.top().push(s);
+    availableNodeStack.top().add(s);
   } // add possible starting SUnits
-  while (!nodesToAdd.empty() && !targetsMet) // correct condition?
+  
+  MachineBasicBlock::iterator RegionEndClone = RegionEnd;
+  int schedLength = std::distance(RegionStart, RegionEnd);
+
+  std::vector<MachineInstr*> currentSched;
+  currentSched.reserve(NumRegionInstrs);
+  for (auto &I : *this) {
+    currentSched.push_back(&I);
+  }
+  RegionEnd = RegionStart;
+  
+  while (!readyNodeStack.empty()) // correct condition?
   {
-    SUnit* s = *nodesToAdd.begin();
-    nodesToAdd.remove(nodesToAdd.begin());
-    scheduleMI(s, false); // add node to the bottom
+    if (readyNodeStack.top().empty()) {
+      readyNodeStack.pop();
+      availableNodeStack.pop();
+      continue;
+    }
+    SUnit* s = readyNodeStack.top().front();
+    readyNodeStack.top().pop();
+    
+    scheduleInst(s->getInstr());
+    currentScheduledInstructions.push_back(s);
 
     // 1. don't call scheduleMI, but schedule instructions in the BB (see end of schedule function)
     // 2. ensure that RegionStart and RegionEnd are updated prior to checkNode call
-    if (checkNode(targetLength, targetAPRP, SmallVector<SUnit*, 8> TopRoots,
-              SmallVector<SUnit*, 8> BottomRoots, const std::vector<SUnit*>& scheduledInstructions, bool isOccupanyPass))
+    // TODO - fix first argument for ilp pass
+    std::map<SUnit*, int> temp;
+    if (checkNode(/*schedule*/ temp, targetLength, targetAPRP, enumBestAPRP, isOccupanyPass))
     {
+      // check leaf
+      if (currentScheduledInstructions.size() == schedLength) {
+        unsigned regPressure = getRealRegPressure().getVGPRNum();
+        if (regPressure < targetAPRP) {
+          // bestScheduledInstructions = currentScheduledInstructions;
+          return targetAPRP;
+        }
+        else if (regPressure < bestAPRP) {
+          bestAPRP = regPressure;
+          bestScheduledInstructions = currentScheduledInstructions;
+          foundBetterSchedule = true;
+        } else {
+          --RegionEnd;
+          continue;
+        }
+      }
 
-
+      availableNodeStack.emplace(availableNodeStack.top());
+      availableNodeStack.top().remove(s);
+      readyNodeStack.emplace(availableNodeStack.top());
       // still promising, add successors to ready queue (not sure if this is best/right way to proceed)
       for (auto dep: s.Succs)
       {
-        nodesToAdd.push(dep.getSUnit());
+        SUnit* succ = dep.getSUnit();
+        bool hasSched = true;
+        for (auto pred_dep : succ -> Preds) {
+          auto it = find(currentScheduledInstructions.begin(), currentScheduledInstructions.end(), pred_dep->getSUnit());
+          if (it == currentScheduledInstructions.end()) {
+            hasSched = false;
+          }
+        }
+        if (hasSched){
+          readyNodeStack.top().push(succ);
+          availableNodeStack.top().add(succ);
+        }
       }
     }
-    else
-    {
-      unscheduleMI(s, false);
+    else {
+      RegionEnd --;
     }
   }
-}
 
-// Not sure if parameters are correct/necessary
-// See ScheduleDAGMILive:scheduleMI
-void GCNScheduleDAGMILive::unscheduleMI(SUnit *SU, bool isTopNode)
-{
-  // TODO
+  if (!foundBetterSchedule)
+  {
+    for (MachineInstr *MI : currentSched) {
+      scheduleInst(MI);
+      return bestAPRP;
+    }
+  } else {
+    for (SUnit *su : bestScheduledInstructions) {
+      scheduleInst(su->getInstr());
+      return bestAPRP;
+    }
+  }
 }
 
 void GCNScheduleDAGMILive::schedule() {
@@ -442,6 +541,7 @@ void GCNScheduleDAGMILive::schedule() {
   }
 
   ScheduleDAGMILive::schedule();
+
   Regions[RegionIdx] = std::make_pair(RegionBegin, RegionEnd);
   RescheduleRegions[RegionIdx] = false;
 
@@ -455,11 +555,13 @@ void GCNScheduleDAGMILive::schedule() {
     return;
 
   // Check the results of scheduling.
-  GCNMaxOccupancySchedStrategy &S = (GCNMaxOccupancySchedStrategy&)*SchedImpl;
+  GCNSchedStrategy &S = (GCNSchedStrategy&)*SchedImpl;
   auto PressureAfter = getRealRegPressure();
 
   LLVM_DEBUG(dbgs() << "Pressure after scheduling: ";
              PressureAfter.print(dbgs()));
+  
+  occupancyPass(TopRoots, 24);
 
   unsigned Occ = MFI.getOccupancy();
   unsigned WavesAfter = std::min(Occ, PressureAfter.getOccupancy(ST));
@@ -514,7 +616,7 @@ void GCNScheduleDAGMILive::schedule() {
       LLVM_DEBUG(dbgs() << "New pressure will result in more spilling.\n");
     }
   }
-
+  /*
   LLVM_DEBUG(dbgs() << "Attempting to revert scheduling.\n");
   RescheduleRegions[RegionIdx] = true;
   RegionEnd = RegionBegin;
@@ -548,6 +650,7 @@ void GCNScheduleDAGMILive::schedule() {
     ++RegionEnd;
     LLVM_DEBUG(dbgs() << "Scheduling " << *MI);
   }
+  */
   RegionBegin = Unsched.front()->getIterator();
   Regions[RegionIdx] = std::make_pair(RegionBegin, RegionEnd);
 
@@ -651,7 +754,7 @@ void GCNScheduleDAGMILive::finalizeSchedule() {
      * 3) For each region call schedule() (should be done via copy/pasta-ed loop)
      *  - This should run ILP pass
      */
-  GCNMaxOccupancySchedStrategy &S = (GCNMaxOccupancySchedStrategy&)*SchedImpl;
+  GCNSchedStrategy &S = (GCNSchedStrategy&)*SchedImpl;
   LLVM_DEBUG(dbgs() << "All regions recorded, starting actual scheduling.\n");
 
   LiveIns.resize(Regions.size());
@@ -779,7 +882,7 @@ static std::map<SUnit*, node> setLatenciesToOne(std::vector<SUnit*> &topRoots) {
     // a mapping from original graph to the clone graph
     std::map<SUnit*, node> mapSUnitToNode;
 
-    std::deque<SUnit*> queue;
+    std::queue<SUnit*> queue;
     std::vector<SUnit*> visited;
 
     for (auto it =  topRoots.begin(); it != topRoots.end(); ++it) {
@@ -836,7 +939,7 @@ static std::map<SUnit*, node> setLatenciesToOne(std::vector<SUnit*> &topRoots) {
             // push succ if it is not in the queue or visited
             if (find(visited.begin(), visited.end(), succ) == visited.end()){
                 queue.push(succ);
-                visited.push_back(succ)
+                visited.push_back(succ);
             }
         }
     }
@@ -848,16 +951,16 @@ static void restoreLatencies(std::vector<SUnit*> &topRoots, std::map<SUnit*, nod
     std::vector<SUnit*> visited;
 
     for (auto it : topRoots) {
-        queue.push(*it);
-        visited.push(*it);
+        queue.push(it);
+        visited.push_back(it);
     }
 
     while (!queue.empty()) {
         SUnit* sunit = queue.front();
         queue.pop();
 
-        SmallVector<SDep, 4> succs = it -> Succs;
-        node currentNode = mapSUnitToNode[it];
+        SmallVector<SDep, 4> succs = sunit -> Succs;
+        node currentNode = mapSUnitToNode[sunit];
         for (auto dep : succs) {
            SUnit* succ = dep.getSUnit();
            node succNode = mapSUnitToNode[succ];
@@ -909,9 +1012,8 @@ static int satisfyLatency(std::vector<SUnit*> schedule) {
     return current_cycle;
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////////////
-static std::map<SUnit*, int> computeEstart(std::deque<SUnit*> nodes) {
-  std::map<SUnit*, int> estart;
+void GCNSchedStrategy::computeEstart(SmallVector<SUnit*, 8> topRoots) {
+  std::deque<SUnit*> nodes(topRoots.begin(), topRoots.end());
 
   while (!nodes.empty()) {
     SUnit* node = nodes.pop_front();
@@ -942,14 +1044,12 @@ static std::map<SUnit*, int> computeEstart(std::deque<SUnit*> nodes) {
       }
     }
   }
-  
-  return estart;
 }
 
-static std::map<SUnit*, int> computeLstart(std::deque<SUnit*> nodes, int maxEstart) {
-  std::map<SUnit*, int> lstart;
+void GCNSchedStrategy::computeLstart(SmallVector<SUnit*, 8> bottomRoots, int maxEstart) {
+  std::deque<SUnit*> nodes(bottomRoots.begin(), bottomRoots.end());
 
-   while (!nodes.empty()) {
+  while (!nodes.empty()) {
     SUnit* node = nodes.pop_front();
     if (node->NumSuccs == 0) {
       lstart[node] = maxEstart;
@@ -978,15 +1078,13 @@ static std::map<SUnit*, int> computeLstart(std::deque<SUnit*> nodes, int maxEsta
       }
     }
   }
-
-  return lstart;
 }
 
-bool cmp(pair<SUnit*, int> &a, pair<SUnit*, int> &b) { 
+bool GCNSchedStrategy::cmp(pair<SUnit*, int> &a, pair<SUnit*, int> &b) { 
   return a.second < b.second; 
 } 
 
-static int computeDLB(std::map<int, SUnit*> scheduleSoFar, std::map<SUnit*, int> estart, std::map<SUnit*, int> lstart) {
+unsigned GCNSchedStrategy::computeDLB(std::map<int, SUnit*> scheduleSoFar) {
   std::map<SUnit*, int> tempLstart;
   for (auto it = scheduleSoFar.begin(); it != scheduleSoFar.end(); ++it) {
     tempLstart[it->second] = lstart[it->second];
@@ -1013,23 +1111,19 @@ static int computeDLB(std::map<int, SUnit*> scheduleSoFar, std::map<SUnit*, int>
   }
 
   // 6. dynamic lower bound = maxDelay + criticalPathDelay
-  int criticalPathDelay = schedule.rbegin()->first;
+  int criticalPathDelay = tempLstart.rbegin()->first;
 
   return maxDelay + criticalPathDelay;
 }
 
-
-static bool checkNode(SUnit* node, 
-                      std::map<SUnit*, int> estart,
-                      std::map<SUnit*, int> lstart,
-                      std::map<int, SUnit*> scheduleSoFar,
-                      int targetLength, 
-                      unsigned targetAPRP, 
-                      unsigned enumBestAPRP, 
-                      std::string passName) {
-  // 1. tighten scheduling ranges - only needed during the ilp pass
-  if (passName == "ilp") {
-    // check that there is at least one cycle time within [estart, lstart] that does not have an instruction scheduled
+bool GCNSchedStrategy::checkNode(std::map<SUnit*, int> scheduleSoFar, unsigned targetLength, unsigned targetAPRP, 
+                                unsigned enumBestAPRP, bool isOccupancyPass) {
+  if (!isOccupancyPass) {
+    /*
+    * 1. tighten scheduling ranges - only needed during the ilp pass
+    * Check that there is at least one cycle time within the instruction's
+    * [estart, lstart] that does not have an instruction scheduled.
+    */
     bool freeCycle = false;
     for (int i = estart[node]; i <= lstart[node]; ++i) {
       if (scheduleSoFar.find(i) == scheduleSoFar.end()) {
@@ -1040,13 +1134,12 @@ static bool checkNode(SUnit* node,
     if (!freeCycle) {
       return false;
     }
-  }
 
-  // 2. dynamic lower bound - only needed during the ilp pass
-  if (passName == "ilp") {
-    // satisfy latencies on the schedule so far
-    // determine how many cycles the schedule so far takes up and how many remain assuming a total number of cycles equal to targetLength
-    unsigned lengthSoFar = computeDLB(scheduleSoFar, estart, lstart);
+    /*
+    * 2. dynamic lower bound - only needed during the ilp pass
+    * Check that the schedule length so far is still less than the targetLength.
+    */
+    unsigned lengthSoFar = computeDLB(scheduleSoFar);
     if (lengthSoFar > targetLength) {
       return false;
     }
@@ -1058,7 +1151,7 @@ static bool checkNode(SUnit* node,
   unsigned aprp = getRealRegPressure().getVGPRNum();
 
   // 5. wrap up stuff
-  if (passName == "occupancy")
+  if (isOccupancyPass)
     return aprp < enumBestAPRP;
   else
     return aprp < targetAPRP;
