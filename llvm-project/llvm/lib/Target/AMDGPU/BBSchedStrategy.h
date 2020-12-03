@@ -10,8 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIB_TARGET_AMDGPU_BBSCHEDSTRATEGY_H
-#define LLVM_LIB_TARGET_AMDGPU_BBSCHEDSTRATEGY_H
+#ifndef LLVM_LIB_TARGET_AMDGPU_GCNSCHEDSTRATEGY_H
+#define LLVM_LIB_TARGET_AMDGPU_GCNSCHEDSTRATEGY_H
 
 #include "GCNRegPressure.h"
 #include "llvm/CodeGen/MachineScheduler.h"
