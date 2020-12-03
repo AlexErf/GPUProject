@@ -11,7 +11,7 @@
 /// occupancy on GCN hardware.
 //===----------------------------------------------------------------------===//
 
-#include "GCNSchedStrategy.h"
+#include "BBSchedStrategy.h"
 #include "AMDGPUSubtarget.h"
 #include "SIInstrInfo.h"
 #include "SIMachineFunctionInfo.h"
@@ -23,6 +23,9 @@
 #include <stack>
 #include <map>
 #include <deque>
+#include <algorithm>
+#include <unordered_map>
+
 
 #define DEBUG_TYPE "machine-scheduler"
 
@@ -329,13 +332,13 @@ GCNScheduleDAGMILive::GCNScheduleDAGMILive(MachineSchedContext *C,
  * }
  */
 
-void GCNScheduleDAGMILive::occupancyPass(std::vector<SUnit* > topRoots, int targetPressure) {
-  std::map<SUnit*, node> mapSUnitToNode = setLatenciesToOne(topRoots);
-  enumerate();
+void GCNScheduleDAGMILive::occupancyPass(SmallVector<SUnit*, 8> topRoots, int targetPressure) {
+  std::map<SUnit*, node*> mapSUnitToNode = setLatenciesToOne(topRoots);
+  // enumerate(topRoots, )
   restoreLatencies(topRoots, mapSUnitToNode);
 }
 
-void GCNScheduleDAGMILive::ilpPass(std::vector<SUnit* > topRoots, std::vector<SUnit* > scheduleInst, int targetPressure) {
+void GCNScheduleDAGMILive::ilpPass(SmallVector<SUnit*, 8> topRoots, std::vector<SUnit* > scheduleInst, int targetPressure) {
   int lowerBound = std::distance(Regions[RegionIdx].first, Regions[RegionIdx].second);
   int upperBound = satisfyLatency(scheduleInst);
   for (int targetLength = lowerBound; targetLength < upperBound - 1; targetLength ++) {
@@ -349,7 +352,7 @@ void GCNScheduleDAGMILive::ilpPass(std::vector<SUnit* > topRoots, std::vector<SU
 /// move teh RegionEnd pointer to the next inst
 void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI) {
   if (MI->isDebugInstr())
-    continue;
+    return;
 
   if (MI->getIterator() != RegionEnd) {
     BB->remove(MI);
@@ -389,7 +392,7 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   auto bestAPRP = getRealRegPressure().getVGPRNum(); // need to call differently to specify region?  also need to convert to APRP?
   // ReadyQueue nodesToAdd(1, "MyReadyQueue");
   std::stack<std::queue<SUnit*>> readyNodeStack;
-  std::stack<std::set<SUnit*>> availableNodeStack;
+  std::stack<std::deque<SUnit*>> availableNodeStack;
   std::vector<SUnit*> bestScheduledInstructions;
   std::vector<SUnit*> currentScheduledInstructions;
   readyNodeStack.emplace();
@@ -399,18 +402,18 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   {
     // nodesToAdd.push(s);
     readyNodeStack.top().push(s);
-    availableNodeStack.top().add(s);
+    availableNodeStack.top().push_back(s);
   } // add possible starting SUnits
   
-  MachineBasicBlock::iterator RegionEndClone = RegionEnd;
-  int schedLength = std::distance(RegionStart, RegionEnd);
+  // MachineBasicBlock::iterator RegionEndClone = RegionEnd;
+  int schedLength = std::distance(RegionBegin, RegionEnd);
 
   std::vector<MachineInstr*> currentSched;
   currentSched.reserve(NumRegionInstrs);
   for (auto &I : *this) {
     currentSched.push_back(&I);
   }
-  RegionEnd = RegionStart;
+  RegionEnd = RegionBegin;
   
   while (!readyNodeStack.empty()) // correct condition?
   {
@@ -427,12 +430,13 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
 
     // 1. don't call scheduleMI, but schedule instructions in the BB (see end of schedule function)
     // 2. ensure that RegionStart and RegionEnd are updated prior to checkNode call
-    // TODO - fix first argument for ilp pass
-    std::map<SUnit*, int> temp;
-    if (checkNode(/*schedule*/ temp, targetLength, targetAPRP, enumBestAPRP, isOccupanyPass))
+    // TODO - fix first argument for ilp pass, fix enumBestAPRP
+    std::map<int, SUnit*> temp;
+    unsigned enumBestAPRP = 0;
+    if (checkNode(s, /*schedule*/ temp, targetLength, targetAPRP, enumBestAPRP, isOccupanyPass))
     {
       // check leaf
-      if (currentScheduledInstructions.size() == schedLength) {
+      if (currentScheduledInstructions.size() == static_cast<size_t>(schedLength)) {
         unsigned regPressure = getRealRegPressure().getVGPRNum();
         if (regPressure < targetAPRP) {
           // bestScheduledInstructions = currentScheduledInstructions;
@@ -449,22 +453,29 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
       }
 
       availableNodeStack.emplace(availableNodeStack.top());
-      availableNodeStack.top().remove(s);
+      for (auto it = availableNodeStack.top().begin(); it != availableNodeStack.top().end(); ++it)
+      {
+        if (*it == s)
+        {
+          availableNodeStack.top().erase(it);
+        }
+      }
+      // availableNodeStack.top().erase(s);
       readyNodeStack.emplace(availableNodeStack.top());
       // still promising, add successors to ready queue (not sure if this is best/right way to proceed)
-      for (auto dep: s.Succs)
+      for (auto dep: s->Succs)
       {
         SUnit* succ = dep.getSUnit();
         bool hasSched = true;
         for (auto pred_dep : succ -> Preds) {
-          auto it = find(currentScheduledInstructions.begin(), currentScheduledInstructions.end(), pred_dep->getSUnit());
+          auto it = find(currentScheduledInstructions.begin(), currentScheduledInstructions.end(), pred_dep.getSUnit());
           if (it == currentScheduledInstructions.end()) {
             hasSched = false;
           }
         }
         if (hasSched){
           readyNodeStack.top().push(succ);
-          availableNodeStack.top().add(succ);
+          availableNodeStack.top().push_back(succ);
         }
       }
     }
@@ -477,13 +488,13 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   {
     for (MachineInstr *MI : currentSched) {
       scheduleInst(MI);
-      return bestAPRP;
     }
+    return bestAPRP;
   } else {
     for (SUnit *su : bestScheduledInstructions) {
       scheduleInst(su->getInstr());
-      return bestAPRP;
     }
+    return bestAPRP;
   }
 }
 
@@ -850,37 +861,9 @@ void GCNScheduleDAGMILive::finalizeSchedule() {
   } while (Stage != LastStage);
 }
 
-struct node {
-    std::vector<node> preds;
-    std::vector<int> predsLatencies;
-
-    std::vector<node> succs;
-    std::vector<int> succsLatencies;
-
-    /// a helper function to get the succ latency
-    int getSuccLatency(node succ) {
-        auto it = find(succs.begin(), succs.end(), succs);
-
-        if (it != succs.end()) {
-            int index = it - succs.begin();
-            return succsLatencies[index];
-        }
-    }
-
-    /// a helper function to get the pred latency
-    int getPredLatency(node pred) {
-        auto it = find(preds.begin(), preds.end(), pred);
-
-        if (it != preds.end()) {
-            int index = it - preds.begin();
-            return predsLatencies[index];
-        }
-    }
-};
-
-static std::map<SUnit*, node> setLatenciesToOne(std::vector<SUnit*> &topRoots) {
+std::map<SUnit*, node*> GCNScheduleDAGMILive::setLatenciesToOne(SmallVector<llvm::SUnit *, 8> &topRoots) {
     // a mapping from original graph to the clone graph
-    std::map<SUnit*, node> mapSUnitToNode;
+    std::map<SUnit*, node*> mapSUnitToNode;
 
     std::queue<SUnit*> queue;
     std::vector<SUnit*> visited;
@@ -895,14 +878,14 @@ static std::map<SUnit*, node> setLatenciesToOne(std::vector<SUnit*> &topRoots) {
         SUnit* sunit = queue.front();
         queue.pop();
 
-        struct node clone;
+        struct node* clone = new node;
         mapSUnitToNode.insert({sunit, clone});
         SmallVector<SDep, 4> succs = sunit -> Succs;
         for (auto it = succs.begin(); it != succs.end(); ++it) {
             SUnit* succ = it->getSUnit();
             if (find(visited.begin(), visited.end(), succ) == visited.begin()){
                 queue.push(succ);
-                visited.push_back(succ)
+                visited.push_back(succ);
             }
         }
     }
@@ -918,20 +901,20 @@ static std::map<SUnit*, node> setLatenciesToOne(std::vector<SUnit*> &topRoots) {
         SUnit* sunit = queue.front();
         queue.pop();
 
-        node& currentNode = mapSUnitToNode[sunit];
+        node* currentNode = mapSUnitToNode[sunit];
         SmallVector<SDep, 4> succs = sunit -> Succs;
         for (auto it = succs.begin(); it != succs.end(); ++it) {
             SUnit* succ = it->getSUnit();
             int latency = it->getLatency();
-            node& succNode = mapSUnitToNode[succ];
+            node* succNode = mapSUnitToNode[succ];
 
             // set current node as successor's pred
-            succNode.preds.push_back(currentNode);
-            succNode.predsLatencies.push_back(latency);
+            succNode->preds.push_back(currentNode);
+            succNode->predsLatencies.push_back(latency);
 
             // set successor as current node's succ
-            currentNode.succs.push_back(succNode);
-            currentNode.succsLatencies.push_back(latency);
+            currentNode->succs.push_back(succNode);
+            currentNode->succsLatencies.push_back(latency);
 
             // set latency to 1
             it->setLatency(1);
@@ -946,41 +929,51 @@ static std::map<SUnit*, node> setLatenciesToOne(std::vector<SUnit*> &topRoots) {
     return mapSUnitToNode;
 }
 
-static void restoreLatencies(std::vector<SUnit*> &topRoots, std::map<SUnit*, node> mapSUnitToNode) {
-    std::queue<SUnit*> queue;
-    std::vector<SUnit*> visited;
+void GCNScheduleDAGMILive::restoreLatencies(SmallVector<llvm::SUnit *, 8> &topRoots, std::map<SUnit*, node*> mapSUnitToNode) {
+  std::queue<SUnit*> queue;
+  std::vector<SUnit*> visited;
 
-    for (auto it : topRoots) {
-        queue.push(it);
-        visited.push_back(it);
-    }
+  for (auto it : topRoots) {
+      queue.push(it);
+      visited.push_back(it);
+  }
 
-    while (!queue.empty()) {
-        SUnit* sunit = queue.front();
-        queue.pop();
+  while (!queue.empty()) {
+      SUnit* sunit = queue.front();
+      queue.pop();
 
-        SmallVector<SDep, 4> succs = sunit -> Succs;
-        node currentNode = mapSUnitToNode[sunit];
-        for (auto dep : succs) {
-           SUnit* succ = dep.getSUnit();
-           node succNode = mapSUnitToNode[succ];
-           int latency = currentNode.getSuccLatency(succNode);
-           dep.setLatency(latency);
+      SmallVector<SDep, 4> succs = sunit -> Succs;
+      node* currentNode = mapSUnitToNode[sunit];
+      for (auto dep : succs) {
+          SUnit* succ = dep.getSUnit();
+          node* succNode = mapSUnitToNode[succ];
+          int latency = currentNode->getSuccLatency(succNode);
+          dep.setLatency(latency);
 
-           if (find(visited.begin(), visited.end(), succ) == visited.end()){
-                queue.push(succ);
-                visited.push_back(succ)
-            }
-        }
-    }
+          if (find(visited.begin(), visited.end(), succ) == visited.end()){
+              queue.push(succ);
+              visited.push_back(succ);
+          }
+
+          
+      }
+  }
+
+  for (auto it = mapSUnitToNode.begin(); it != mapSUnitToNode.end(); ++it)
+  {
+    delete it->second;
+  }
+
 }
 
 /// Compute how many stall need to be inserted to satisfy the latency
-static int satisfyLatency(std::vector<SUnit*> schedule) {
+int GCNScheduleDAGMILive::satisfyLatency(std::vector<SUnit*> schedule) {
     int current_cycle = 0;
-    int index = 0;
+    unsigned index = 0;
 
-    std::map<SDep, int> sched_sdep;
+    std::vector<SDep> sched;
+    std::vector<int> cycle_count;
+    // std::unordered_map<SDep, int> sched_sdep;
 
     while (index < schedule.size()) {
         SUnit* sunit = schedule[index];
@@ -988,14 +981,19 @@ static int satisfyLatency(std::vector<SUnit*> schedule) {
 
         bool can_schedule = true;
         for (auto pred : preds) {
-            if (sched_sdep[pred] > 0) {
-                can_schedule = false;
+            auto it = find(sched.begin(), sched.end(), pred);
+            if (it != sched.end()) {
+                if (cycle_count[it-sched.begin()] > 0){
+                    can_schedule = false;
+                }
+
             }
         }
         if (can_schedule) {
             for (auto succ : sunit -> Succs) {
                 int latency = succ.getLatency();
-                sched_sdep.insert(std::make_pair(succ, latency));
+                sched.push_back(succ);
+                cycle_count.push_back(latency);
             }
             // schedule next inst
             index ++;
@@ -1005,37 +1003,38 @@ static int satisfyLatency(std::vector<SUnit*> schedule) {
         current_cycle ++;
 
         // decrease all scheduled latency
-        for (std::pair<SDep, int> element : sched_sdep) {
-            sched_sdep[element.first] --;
+        for (unsigned i = 0; i < cycle_count.size(); i ++) {
+            cycle_count[i] --;
         }
     }
     return current_cycle;
 }
 
-void GCNSchedStrategy::computeEstart(SmallVector<SUnit*, 8> topRoots) {
+void GCNScheduleDAGMILive::computeEstart(SmallVector<SUnit*, 8> topRoots) {
   std::deque<SUnit*> nodes(topRoots.begin(), topRoots.end());
 
   while (!nodes.empty()) {
-    SUnit* node = nodes.pop_front();
+    SUnit* node = nodes.front();
+    nodes.pop_front();
     if (node->NumPreds == 0) {
       estart[node] = 0;
     }
     else {
       SmallVector<SDep, 4> preds = node->Preds;
-      int maxVal = 0;
+      unsigned maxVal = 0;
       bool allPreds = true;
       for (auto it = preds.begin(); it != preds.end(); ++it) {
         if (estart.find(it->getSUnit()) == estart.end()) {
           allPreds = false;
           break;
         }
-        maxVal = max(maxVal, estart[it->getSUnit()] + it->getLatency());
+        maxVal = (maxVal > estart[it->getSUnit()] + it->getLatency()) ? maxVal : (estart[it->getSUnit()] + it->getLatency());
       }
       if (allPreds) {
         estart[node] = maxVal;
         SmallVector<SDep, 4> succs = node->Succs;
         for (auto it =  succs.begin(); it != succs.end(); ++it) {
-          if (find(nodes.begin(), nodes.end(), *it) == nodes.end()) 
+          if (find(nodes.begin(), nodes.end(), it->getSUnit()) == nodes.end()) 
             nodes.push_back(it->getSUnit());
         }
       }
@@ -1046,30 +1045,31 @@ void GCNSchedStrategy::computeEstart(SmallVector<SUnit*, 8> topRoots) {
   }
 }
 
-void GCNSchedStrategy::computeLstart(SmallVector<SUnit*, 8> bottomRoots, int maxEstart) {
+void GCNScheduleDAGMILive::computeLstart(SmallVector<SUnit*, 8> bottomRoots, int maxEstart) {
   std::deque<SUnit*> nodes(bottomRoots.begin(), bottomRoots.end());
 
   while (!nodes.empty()) {
-    SUnit* node = nodes.pop_front();
+    SUnit* node = nodes.front();
+    nodes.pop_front();
     if (node->NumSuccs == 0) {
       lstart[node] = maxEstart;
     }
     else {
       SmallVector<SDep, 4> succs = node->Succs;
-      int minVal = 0;
+      unsigned minVal = 0;
       bool allSuccs = true;
       for (auto it = succs.begin(); it != succs.end(); ++it) {
         if (lstart.find(it->getSUnit()) == lstart.end()) {
           allSuccs = false;
           break;
         }
-        minVal = min(minVal, lstart[it->getSUnit()] - it->getLatency());
+        minVal = (minVal < lstart[it->getSUnit()] - it->getLatency()) ? minVal : (lstart[it->getSUnit()] - it->getLatency()); 
       }
       if (allSuccs) {
         lstart[node] = minVal;
         SmallVector<SDep, 4> preds = node->Preds;
         for (auto it =  preds.begin(); it != preds.end(); ++it) {
-          if (find(nodes.begin(), nodes.end(), *it) == nodes.end()) 
+          if (find(nodes.begin(), nodes.end(), it->getSUnit()) == nodes.end()) 
             nodes.push_back(it->getSUnit());
         }
       }
@@ -1080,18 +1080,22 @@ void GCNSchedStrategy::computeLstart(SmallVector<SUnit*, 8> bottomRoots, int max
   }
 }
 
-bool GCNSchedStrategy::cmp(pair<SUnit*, int> &a, pair<SUnit*, int> &b) { 
-  return a.second < b.second; 
-} 
 
-unsigned GCNSchedStrategy::computeDLB(std::map<int, SUnit*> scheduleSoFar) {
+class cmp {
+  public:
+    bool operator()(const std::pair<SUnit*, int> &a, const std::pair<SUnit*, int> &b) const { 
+      return a.second < b.second; 
+    } 
+};
+
+unsigned GCNScheduleDAGMILive::computeDLB(std::map<int, SUnit*> scheduleSoFar) {
   std::map<SUnit*, int> tempLstart;
   for (auto it = scheduleSoFar.begin(); it != scheduleSoFar.end(); ++it) {
     tempLstart[it->second] = lstart[it->second];
   }
 
   // 4. sort operations in order of increasing ALAP
-  std::set<pair<SUnit*, int>, cmp> ops(tempLstart.begin(), tempLstart.end()); 
+  std::set<std::pair<SUnit*, int>, cmp> ops(tempLstart.begin(), tempLstart.end()); 
 
   // 5. schedule each operation
   std::map<int, SUnit*> schedule;
@@ -1107,16 +1111,16 @@ unsigned GCNSchedStrategy::computeDLB(std::map<int, SUnit*> scheduleSoFar) {
       ++opTime;
     }
 
-    maxDelay = max(maxDelay, opTime - lstart[it->first]);
+    maxDelay = (maxDelay > opTime - lstart[it->first]) ? maxDelay : opTime - lstart[it->first]; 
   }
 
   // 6. dynamic lower bound = maxDelay + criticalPathDelay
-  int criticalPathDelay = tempLstart.rbegin()->first;
+  int criticalPathDelay = tempLstart.rbegin()->second;
 
   return maxDelay + criticalPathDelay;
 }
 
-bool GCNSchedStrategy::checkNode(std::map<SUnit*, int> scheduleSoFar, unsigned targetLength, unsigned targetAPRP, 
+bool GCNScheduleDAGMILive::checkNode(SUnit* node, std::map<int, SUnit*> scheduleSoFar, unsigned targetLength, unsigned targetAPRP, 
                                 unsigned enumBestAPRP, bool isOccupancyPass) {
   if (!isOccupancyPass) {
     /*

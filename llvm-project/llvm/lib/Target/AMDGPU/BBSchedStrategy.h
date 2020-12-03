@@ -22,6 +22,36 @@ class SIMachineFunctionInfo;
 class SIRegisterInfo;
 class GCNSubtarget;
 
+struct node {
+    std::vector<node*> preds;
+    std::vector<int> predsLatencies;
+
+    std::vector<node*> succs;
+    std::vector<int> succsLatencies;
+
+    /// a helper function to get the succ latency
+    int getSuccLatency(node* succ) {
+        auto it = find(succs.begin(), succs.end(), succ);
+
+        if (it != succs.end()) {
+            int index = it - succs.begin();
+            return succsLatencies[index];
+        }
+        return -1;
+    }
+
+    /// a helper function to get the pred latency
+    int getPredLatency(node* pred) {
+        auto it = find(preds.begin(), preds.end(), pred);
+
+        if (it != preds.end()) {
+            int index = it - preds.begin();
+            return predsLatencies[index];
+        }
+        return -1;
+    }
+  };
+
 /// This is a minimal scheduler strategy.  The main difference between this
 /// and the GenericScheduler is that GCNSchedStrategy uses different
 /// heuristics to determine excess/critical pressure sets.  Its goal is to
@@ -52,23 +82,8 @@ class GCNSchedStrategy final : public GenericScheduler {
 
   MachineFunction *MF;
 
-  std::map<SUnit*, int> estart;
-  std::map<SUnit*, int> lstart;
-
-protected:  
-
-  void GCNSchedStrategy::computeEstart(SmallVector<SUnit*, 8> topRoots);
-
-  void GCNSchedStrategy::computeLstart(SmallVector<SUnit*, 8> bottomRoots, int maxEstart);
-
-  bool GCNSchedStrategy::cmp(pair<SUnit*, int> &a, pair<SUnit*, int> &b);
-
-  unsigned GCNSchedStrategy::computeDLB(std::map<int, SUnit*> scheduleSoFar);
-
-  bool GCNSchedStrategy::checkNode(std::map<SUnit*, int> scheduleSoFar, unsigned targetLength, unsigned targetAPRP, 
-                                  unsigned enumBestAPRP, bool isOccupancyPass);
 public:
-  BBSchedStrategy(const MachineSchedContext *C);
+  GCNSchedStrategy(const MachineSchedContext *C);
 
   SUnit *pickNode(bool &IsTopNode) override;
 
@@ -129,11 +144,28 @@ class GCNScheduleDAGMILive final : public ScheduleDAGMILive {
   // Compute and cache live-ins and pressure for all regions in block.
   void computeBlockPressure(const MachineBasicBlock *MBB);
 
-  void GCNScheduleDAGMILive::occupancyPass(std::vector<SUnit* > topRoots, int targetPressure);
-  void GCNScheduleDAGMILive::ilpPass(std::vector<SUnit* > topRoots, std::vector<SUnit* > scheduleInst, int targetPressure);
-  int GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BottomRoots,
+  void occupancyPass(SmallVector<SUnit*, 8> topRoots, int targetPressure);
+  void ilpPass(SmallVector<SUnit*, 8> topRoots, std::vector<SUnit* > scheduleInst, int targetPressure);
+  unsigned enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BottomRoots,
                                       unsigned targetLength, unsigned targetAPRP, bool isOccupanyPass);
-  void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI);
+  void scheduleInst(MachineInstr* MI);
+  int satisfyLatency(std::vector<SUnit*> schedule);
+
+  void restoreLatencies(SmallVector<llvm::SUnit *, 8> &topRoots, std::map<SUnit*, node*> mapSUnitToNode);
+
+  std::map<SUnit*, int> estart;
+  std::map<SUnit*, int> lstart;
+
+  std::map<SUnit*, node*> setLatenciesToOne(SmallVector<llvm::SUnit *, 8> &topRoots);
+
+  void computeEstart(SmallVector<SUnit*, 8> topRoots);
+
+  void computeLstart(SmallVector<SUnit*, 8> bottomRoots, int maxEstart);
+
+  unsigned computeDLB(std::map<int, SUnit*> scheduleSoFar);
+
+  bool checkNode(SUnit* node, std::map<int, SUnit*> scheduleSoFar, unsigned targetLength, unsigned targetAPRP, 
+                unsigned enumBestAPRP, bool isOccupancyPass);
 
 public:
   GCNScheduleDAGMILive(MachineSchedContext *C,
