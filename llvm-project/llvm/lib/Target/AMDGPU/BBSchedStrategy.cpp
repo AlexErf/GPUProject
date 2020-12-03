@@ -31,11 +31,11 @@
 
 using namespace llvm;
 
-GCNSchedStrategy::GCNSchedStrategy(
+GCNMaxOccupancySchedStrategy::GCNMaxOccupancySchedStrategy(
     const MachineSchedContext *C) :
     GenericScheduler(C), TargetOccupancy(0), MF(nullptr) { }
 
-void GCNSchedStrategy::initialize(ScheduleDAGMI *DAG) {
+void GCNMaxOccupancySchedStrategy::initialize(ScheduleDAGMI *DAG) {
   GenericScheduler::initialize(DAG);
 
   const SIRegisterInfo *SRI = static_cast<const SIRegisterInfo*>(TRI);
@@ -66,7 +66,7 @@ void GCNSchedStrategy::initialize(ScheduleDAGMI *DAG) {
   VGPRCriticalLimit -= ErrorMargin;
 }
 
-void GCNSchedStrategy::initCandidate(SchedCandidate &Cand, SUnit *SU,
+void GCNMaxOccupancySchedStrategy::initCandidate(SchedCandidate &Cand, SUnit *SU,
                                      bool AtTop, const RegPressureTracker &RPTracker,
                                      const SIRegisterInfo *SRI,
                                      unsigned SGPRPressure,
@@ -148,7 +148,7 @@ void GCNSchedStrategy::initCandidate(SchedCandidate &Cand, SUnit *SU,
 
 // This function is mostly cut and pasted from
 // GenericScheduler::pickNodeFromQueue()
-void GCNSchedStrategy::pickNodeFromQueue(SchedBoundary &Zone,
+void GCNMaxOccupancySchedStrategy::pickNodeFromQueue(SchedBoundary &Zone,
                                          const CandPolicy &ZonePolicy,
                                          const RegPressureTracker &RPTracker,
                                          SchedCandidate &Cand) {
@@ -177,7 +177,7 @@ void GCNSchedStrategy::pickNodeFromQueue(SchedBoundary &Zone,
 
 // This function is mostly cut and pasted from
 // GenericScheduler::pickNodeBidirectional()
-SUnit *GCNSchedStrategy::pickNodeBidirectional(bool &IsTopNode) {
+SUnit *GCNMaxOccupancySchedStrategy::pickNodeBidirectional(bool &IsTopNode) {
   // Schedule as far as possible in the direction of no choice. This is most
   // efficient, but also provides the best heuristics for CriticalPSets.
   if (SUnit *SU = Bot.pickOnlyChoice()) {
@@ -254,7 +254,7 @@ SUnit *GCNSchedStrategy::pickNodeBidirectional(bool &IsTopNode) {
 
 // This function is mostly cut and pasted from
 // GenericScheduler::pickNode()
-SUnit *GCNSchedStrategy::pickNode(bool &IsTopNode) {
+SUnit *GCNMaxOccupancySchedStrategy::pickNode(bool &IsTopNode) {
   if (DAG->top() == DAG->bottom()) {
     assert(Top.Available.empty() && Top.Pending.empty() &&
            Bot.Available.empty() && Bot.Pending.empty() && "ReadyQ garbage");
@@ -566,7 +566,7 @@ void GCNScheduleDAGMILive::schedule() {
     return;
 
   // Check the results of scheduling.
-  GCNSchedStrategy &S = (GCNSchedStrategy&)*SchedImpl;
+  GCNMaxOccupancySchedStrategy &S = (GCNMaxOccupancySchedStrategy&)*SchedImpl;
   auto PressureAfter = getRealRegPressure();
 
   LLVM_DEBUG(dbgs() << "Pressure after scheduling: ";
@@ -765,7 +765,7 @@ void GCNScheduleDAGMILive::finalizeSchedule() {
      * 3) For each region call schedule() (should be done via copy/pasta-ed loop)
      *  - This should run ILP pass
      */
-  GCNSchedStrategy &S = (GCNSchedStrategy&)*SchedImpl;
+  GCNMaxOccupancySchedStrategy &S = (GCNMaxOccupancySchedStrategy&)*SchedImpl;
   LLVM_DEBUG(dbgs() << "All regions recorded, starting actual scheduling.\n");
 
   LiveIns.resize(Regions.size());

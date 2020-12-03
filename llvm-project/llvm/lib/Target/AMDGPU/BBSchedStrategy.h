@@ -56,7 +56,7 @@ struct node {
 /// and the GenericScheduler is that GCNSchedStrategy uses different
 /// heuristics to determine excess/critical pressure sets.  Its goal is to
 /// maximize kernel occupancy (i.e. maximum number of waves per simd).
-class GCNSchedStrategy final : public GenericScheduler {
+class GCNMaxOccupancySchedStrategy final : public GenericScheduler {
   friend class GCNScheduleDAGMILive;
 
   SUnit *pickNodeBidirectional(bool &IsTopNode);
@@ -83,7 +83,7 @@ class GCNSchedStrategy final : public GenericScheduler {
   MachineFunction *MF;
 
 public:
-  GCNSchedStrategy(const MachineSchedContext *C);
+  GCNMaxOccupancySchedStrategy(const MachineSchedContext *C);
 
   SUnit *pickNode(bool &IsTopNode) override;
 
