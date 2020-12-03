@@ -57,15 +57,15 @@ class GCNSchedStrategy final : public GenericScheduler {
 
 protected:  
 
-  void BBSchedStrategy::computeEstart(SmallVector<SUnit*, 8> topRoots);
+  void GCNSchedStrategy::computeEstart(SmallVector<SUnit*, 8> topRoots);
 
-  void BBSchedStrategy::computeLstart(SmallVector<SUnit*, 8> bottomRoots, int maxEstart);
+  void GCNSchedStrategy::computeLstart(SmallVector<SUnit*, 8> bottomRoots, int maxEstart);
 
-  bool BBSchedStrategy::cmp(pair<SUnit*, int> &a, pair<SUnit*, int> &b);
+  bool GCNSchedStrategy::cmp(pair<SUnit*, int> &a, pair<SUnit*, int> &b);
 
-  unsigned BBSchedStrategy::computeDLB(std::map<int, SUnit*> scheduleSoFar);
+  unsigned GCNSchedStrategy::computeDLB(std::map<int, SUnit*> scheduleSoFar);
 
-  bool BBSchedStrategy::checkNode(std::map<SUnit*, int> scheduleSoFar, unsigned targetLength, unsigned targetAPRP, 
+  bool GCNSchedStrategy::checkNode(std::map<SUnit*, int> scheduleSoFar, unsigned targetLength, unsigned targetAPRP, 
                                   unsigned enumBestAPRP, bool isOccupancyPass);
 public:
   BBSchedStrategy(const MachineSchedContext *C);
@@ -146,4 +146,4 @@ public:
 
 } // End namespace llvm
 
-#endif // BBSCHEDSTRATEGY_H
+#endif // GCNSCHEDSTRATEGY_H
