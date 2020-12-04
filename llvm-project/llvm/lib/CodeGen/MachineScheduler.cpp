@@ -326,8 +326,11 @@ ScheduleDAGInstrs *MachineScheduler::createMachineScheduler() {
 
   // Get the default scheduler set by the target for this function.
   ScheduleDAGInstrs *Scheduler = PassConfig->createMachineScheduler(this);
-  if (Scheduler)
+   if (Scheduler)
+   {
+    LLVM_DEBUG(dbgs() << "Scheduler is real");
     return Scheduler;
+   }
 
   // Default to GenericScheduler.
   return createGenericSchedLive(this);

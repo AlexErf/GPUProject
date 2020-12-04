@@ -23,7 +23,8 @@
 #include "AMDGPUTargetObjectFile.h"
 #include "AMDGPUTargetTransformInfo.h"
 #include "GCNIterativeScheduler.h"
-#include "GCNSchedStrategy.h"
+// #include "GCNSchedStrategy.h"
+#include "BBSchedStrategy.h"
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 #include "R600MachineScheduler.h"
 #include "SIMachineFunctionInfo.h"
@@ -56,6 +57,8 @@
 #include <memory>
 
 using namespace llvm;
+
+#define DEBUG_TYPE "machine-scheduler"
 
 static cl::opt<bool> EnableR600StructurizeCFG(
   "r600-ir-structurize",
@@ -280,6 +283,7 @@ static ScheduleDAGInstrs *createSIMachineScheduler(MachineSchedContext *C) {
 
 static ScheduleDAGInstrs *
 createGCNMaxOccupancyMachineScheduler(MachineSchedContext *C) {
+  LLVM_DEBUG(dbgs() << "CREATING GCN SCHEDULE DAG MI LIVE IN TARGET MACHINE\n");
   ScheduleDAGMILive *DAG =
     new GCNScheduleDAGMILive(C, std::make_unique<GCNMaxOccupancySchedStrategy>(C));
   DAG->addMutation(createLoadClusterDAGMutation(DAG->TII, DAG->TRI));
@@ -859,6 +863,7 @@ ScheduleDAGInstrs *GCNPassConfig::createMachineScheduler(
   const GCNSubtarget &ST = C->MF->getSubtarget<GCNSubtarget>();
   if (ST.enableSIScheduler())
     return createSIMachineScheduler(C);
+  LLVM_DEBUG(dbgs() << "GOING TO CREATE GCN MAX OCCUPANY MACHINE SCHEULER\n");
   return createGCNMaxOccupancyMachineScheduler(C);
 }
 

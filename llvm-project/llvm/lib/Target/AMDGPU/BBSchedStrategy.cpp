@@ -307,7 +307,8 @@ GCNScheduleDAGMILive::GCNScheduleDAGMILive(MachineSchedContext *C,
 
   LLVM_DEBUG(dbgs() << "Starting occupancy is " << StartingOccupancy << ".\n");
   LLVM_DEBUG(dbgs() << "Nathan and Alex's starting occupancy is: " << StartingOccupancy << ".\n");
-  LLVM_DEBUG(dbgs() << "Nathan and Alex's starting occupancy is ALSO: " << StartingOccupancy << ".\n");
+  LLVM_DEBUG(dbgs() << "Nathan and Alex's starting occupancy is ALSO ALSO: " << StartingOccupancy << ".\n");
+  LLVM_DEBUG(dbgs() << "AHHHHH " << StartingOccupancy << ".\n");
 }
 
 /*
@@ -332,9 +333,10 @@ GCNScheduleDAGMILive::GCNScheduleDAGMILive(MachineSchedContext *C,
  * }
  */
 
-void GCNScheduleDAGMILive::occupancyPass(SmallVector<SUnit*, 8> topRoots, int targetPressure) {
+void GCNScheduleDAGMILive::occupancyPass(SmallVector<SUnit*, 8> topRoots, SmallVector<SUnit*, 8> bottomRoots, unsigned targetPressure) {
+  LLVM_DEBUG(dbgs() << "occupancy pass called\n");
   std::map<SUnit*, node*> mapSUnitToNode = setLatenciesToOne(topRoots);
-  // enumerate(topRoots, )
+  enumerate(topRoots, bottomRoots, 0, targetPressure, true);
   restoreLatencies(topRoots, mapSUnitToNode);
 }
 
@@ -384,7 +386,7 @@ void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI) {
 unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BottomRoots,
                                       unsigned targetLength, unsigned targetAPRP, bool isOccupanyPass)
 {
-
+  LLVM_DEBUG(dbgs() << "ENUMERATE CALLED!");
   // should set regionEnd to regionStart, so we can build our own schedule (store original regionEnd)
   // keep a stack of ready queues so that we can backtrack effectively
   // keep a list of instructions (SUnit) that have been scheduled
@@ -432,8 +434,7 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     // 2. ensure that RegionStart and RegionEnd are updated prior to checkNode call
     // TODO - fix first argument for ilp pass, fix enumBestAPRP
     std::map<int, SUnit*> temp;
-    unsigned enumBestAPRP = 0;
-    if (checkNode(s, /*schedule*/ temp, targetLength, targetAPRP, enumBestAPRP, isOccupanyPass))
+    if (checkNode(s, /*schedule*/ temp, targetLength, targetAPRP, bestAPRP, isOccupanyPass))
     {
       // check leaf
       if (currentScheduledInstructions.size() == static_cast<size_t>(schedLength)) {
@@ -458,6 +459,7 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
         if (*it == s)
         {
           availableNodeStack.top().erase(it);
+          break;
         }
       }
       // availableNodeStack.top().erase(s);
@@ -486,11 +488,13 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
 
   if (!foundBetterSchedule)
   {
+    RegionEnd = RegionBegin;
     for (MachineInstr *MI : currentSched) {
       scheduleInst(MI);
     }
     return bestAPRP;
   } else {
+    RegionEnd = RegionBegin;
     for (SUnit *su : bestScheduledInstructions) {
       scheduleInst(su->getInstr());
     }
@@ -572,7 +576,7 @@ void GCNScheduleDAGMILive::schedule() {
   LLVM_DEBUG(dbgs() << "Pressure after scheduling: ";
              PressureAfter.print(dbgs()));
   
-  occupancyPass(TopRoots, 24);
+  occupancyPass(TopRoots, BotRoots, 24);
 
   unsigned Occ = MFI.getOccupancy();
   unsigned WavesAfter = std::min(Occ, PressureAfter.getOccupancy(ST));
@@ -627,6 +631,7 @@ void GCNScheduleDAGMILive::schedule() {
       LLVM_DEBUG(dbgs() << "New pressure will result in more spilling.\n");
     }
   }
+  
   /*
   LLVM_DEBUG(dbgs() << "Attempting to revert scheduling.\n");
   RescheduleRegions[RegionIdx] = true;
@@ -765,9 +770,11 @@ void GCNScheduleDAGMILive::finalizeSchedule() {
      * 3) For each region call schedule() (should be done via copy/pasta-ed loop)
      *  - This should run ILP pass
      */
-  GCNMaxOccupancySchedStrategy &S = (GCNMaxOccupancySchedStrategy&)*SchedImpl;
+  LLVM_DEBUG(dbgs() << "Calling our finalizeSchedule.\n");
   LLVM_DEBUG(dbgs() << "All regions recorded, starting actual scheduling.\n");
-
+  
+  GCNMaxOccupancySchedStrategy &S = (GCNMaxOccupancySchedStrategy&)*SchedImpl;
+  
   LiveIns.resize(Regions.size());
   Pressure.resize(Regions.size());
   RescheduleRegions.resize(Regions.size());
@@ -859,6 +866,7 @@ void GCNScheduleDAGMILive::finalizeSchedule() {
     if (Stage == UnclusteredReschedule)
       SavedMutations.swap(Mutations);
   } while (Stage != LastStage);
+  
 }
 
 std::map<SUnit*, node*> GCNScheduleDAGMILive::setLatenciesToOne(SmallVector<llvm::SUnit *, 8> &topRoots) {
@@ -883,12 +891,14 @@ std::map<SUnit*, node*> GCNScheduleDAGMILive::setLatenciesToOne(SmallVector<llvm
         SmallVector<SDep, 4> succs = sunit -> Succs;
         for (auto it = succs.begin(); it != succs.end(); ++it) {
             SUnit* succ = it->getSUnit();
-            if (find(visited.begin(), visited.end(), succ) == visited.begin()){
+            if (find(visited.begin(), visited.end(), succ) == visited.end()){
                 queue.push(succ);
                 visited.push_back(succ);
             }
         }
     }
+
+    LLVM_DEBUG(dbgs() << "mapSUnitToNode size: " << mapSUnitToNode.size() << "\n");
 
     visited.clear();
     for (auto it =  topRoots.begin(); it != topRoots.end(); ++it) {
@@ -909,9 +919,11 @@ std::map<SUnit*, node*> GCNScheduleDAGMILive::setLatenciesToOne(SmallVector<llvm
             node* succNode = mapSUnitToNode[succ];
 
             // set current node as successor's pred
+            LLVM_DEBUG(dbgs() << static_cast<void*>(succNode) << "\n");
+            // LLVM_DEBUG(dbgs() << typeid(succNode->preds).name() << " " << typeid(succNode->predsLatencies).name() << " " << latency << "\n");
             succNode->preds.push_back(currentNode);
             succNode->predsLatencies.push_back(latency);
-
+            
             // set successor as current node's succ
             currentNode->succs.push_back(succNode);
             currentNode->succsLatencies.push_back(latency);
@@ -1123,6 +1135,8 @@ unsigned GCNScheduleDAGMILive::computeDLB(std::map<int, SUnit*> scheduleSoFar) {
 bool GCNScheduleDAGMILive::checkNode(SUnit* node, std::map<int, SUnit*> scheduleSoFar, unsigned targetLength, unsigned targetAPRP, 
                                 unsigned enumBestAPRP, bool isOccupancyPass) {
   if (!isOccupancyPass) {
+    LLVM_DEBUG(dbgs() << "checkNode() for ilp pass.\n");
+ 
     /*
     * 1. tighten scheduling ranges - only needed during the ilp pass
     * Check that there is at least one cycle time within the instruction's
@@ -1148,6 +1162,9 @@ bool GCNScheduleDAGMILive::checkNode(SUnit* node, std::map<int, SUnit*> schedule
       return false;
     }
   }
+  else {
+    LLVM_DEBUG(dbgs() << "checkNode() for occupancy pass.\n");
+  }
 
   // 3. check history??? - SKIP FOR NOW
 
@@ -1155,8 +1172,10 @@ bool GCNScheduleDAGMILive::checkNode(SUnit* node, std::map<int, SUnit*> schedule
   unsigned aprp = getRealRegPressure().getVGPRNum();
 
   // 5. wrap up stuff
-  if (isOccupancyPass)
+  if (isOccupancyPass) {
+    LLVM_DEBUG(dbgs() << "checkNode() for occupancy pass just before return.\n");
     return aprp < enumBestAPRP;
+  }
   else
     return aprp < targetAPRP;
 }

@@ -10,8 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIB_TARGET_AMDGPU_GCNSCHEDSTRATEGY_H
-#define LLVM_LIB_TARGET_AMDGPU_GCNSCHEDSTRATEGY_H
+#ifndef LLVM_LIB_TARGET_AMDGPU_BBSCHEDSTRATEGY_H
+#define LLVM_LIB_TARGET_AMDGPU_BBSCHEDSTRATEGY_H
 
 #include "GCNRegPressure.h"
 #include "llvm/CodeGen/MachineScheduler.h"
@@ -144,7 +144,7 @@ class GCNScheduleDAGMILive final : public ScheduleDAGMILive {
   // Compute and cache live-ins and pressure for all regions in block.
   void computeBlockPressure(const MachineBasicBlock *MBB);
 
-  void occupancyPass(SmallVector<SUnit*, 8> topRoots, int targetPressure);
+  void occupancyPass(SmallVector<SUnit*, 8> topRoots, SmallVector<SUnit*, 8> bottomRoots, unsigned targetPressure);
   void ilpPass(SmallVector<SUnit*, 8> topRoots, std::vector<SUnit* > scheduleInst, int targetPressure);
   unsigned enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BottomRoots,
                                       unsigned targetLength, unsigned targetAPRP, bool isOccupanyPass);
@@ -178,4 +178,4 @@ public:
 
 } // End namespace llvm
 
-#endif // GCNSCHEDSTRATEGY_H
+#endif // BBSCHEDSTRATEGY_H
