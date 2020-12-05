@@ -571,10 +571,10 @@ bool GCNScheduleDAGMILive::checkNode(SUnit* node, std::map<int, SUnit*> schedule
   // 5. wrap up stuff
   if (isOccupancyPass) {
     // LLVM_DEBUG(dbgs() << "checkNode() for occupancy pass just before return.\n");
-    return aprp < enumBestAPRP;
+    return aprp <= enumBestAPRP;
   }
   else
-    return aprp < targetAPRP;
+    return aprp <= targetAPRP;
 }
 
 void GCNScheduleDAGMILive::schedule() {
