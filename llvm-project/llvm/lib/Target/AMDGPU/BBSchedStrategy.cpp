@@ -465,6 +465,8 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
           bestAPRP = regPressure;
           bestScheduledInstructions = currentScheduledInstructions;
           foundBetterSchedule = true;
+          // temporary return a better sched
+          return bestAPRP;
         } else {
           currentScheduledInstructions.pop_back();
           --RegionEnd;
