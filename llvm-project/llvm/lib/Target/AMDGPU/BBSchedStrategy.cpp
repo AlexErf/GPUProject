@@ -575,7 +575,7 @@ bool GCNScheduleDAGMILive::checkNode(SUnit* node, const std::map<int, SUnit*>& s
     LLVM_DEBUG(dbgs() << "Find entry in history table. APRP: " << historyIter->second << "\n");
     if(historyIter->second <= aprp) {
       LLVM_DEBUG(dbgs() << "Pruned based on history table. Current APRP: " << aprp << "\n.");
-      // return false;
+      return false;
     }
   } else {
       historyMap.emplace_hint(historyIter, std::move(history), aprp);
