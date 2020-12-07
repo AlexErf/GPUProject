@@ -450,7 +450,7 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     // 2. ensure that RegionStart and RegionEnd are updated prior to checkNode call
     // TODO - fix first argument for ilp pass
     std::map<int, SUnit*> temp;
-    if (checkNode(s, /*schedule*/ temp, targetLength, targetAPRP, bestAPRP, isOccupanyPass))
+    if (checkNode(s, /*schedule*/ temp, currentScheduledInstructions, targetLength, targetAPRP, bestAPRP, isOccupanyPass))
     {
       LLVM_DEBUG(dbgs() << "current sched len: " << currentScheduledInstructions.size() << ", total len: " << static_cast<size_t>(schedLength) << "\n");
       // check leaf
@@ -529,7 +529,7 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   }
 }
 
-bool GCNScheduleDAGMILive::checkNode(SUnit* node, std::map<int, SUnit*> scheduleSoFar, unsigned targetLength, unsigned targetAPRP, 
+bool GCNScheduleDAGMILive::checkNode(SUnit* node, const std::map<int, SUnit*>& scheduleSoFar, const std::vector<SUnit*>& currentScheduledInstructions, unsigned targetLength, unsigned targetAPRP, 
                                 unsigned enumBestAPRP, bool isOccupancyPass) {
   if (!isOccupancyPass) {
     LLVM_DEBUG(dbgs() << "checkNode() for ilp pass.\n");
@@ -562,16 +562,29 @@ bool GCNScheduleDAGMILive::checkNode(SUnit* node, std::map<int, SUnit*> schedule
   else {
     // LLVM_DEBUG(dbgs() << "checkNode() for occupancy pass.\n");
   }
-
-  // 3. check history??? - SKIP FOR NOW
-
   // 4. compute aprp
   unsigned aprp = getRealRegPressure().getVGPRNum();
+
+  // 3. check history??? - SKIP FOR NOW
+  std::vector<MachineInstr*> history(currentScheduledInstructions.size());
+  std::transform(currentScheduledInstructions.begin(), currentScheduledInstructions.end(), history.begin(), [](const SUnit* s){return s->getInstr();});
+  std::sort(history.begin(), history.end());
+  static std::map<std::vector<MachineInstr*>, unsigned> historyMap;
+  auto historyIter = historyMap.find(history);
+  if(historyIter != historyMap.end()) {
+    LLVM_DEBUG(dbgs() << "Find entry in history table. APRP: " << historyIter->second << "\n");
+    if(historyIter->second <= aprp) {
+      LLVM_DEBUG(dbgs() << "Pruned based on history table. Current APRP: " << aprp << "\n.");
+      // return false;
+    }
+  } else {
+      historyMap.emplace_hint(historyIter, std::move(history), aprp);
+  }
 
   // 5. wrap up stuff
   if (isOccupancyPass) {
     // LLVM_DEBUG(dbgs() << "checkNode() for occupancy pass just before return.\n");
-    return aprp <= enumBestAPRP;
+    return aprp < enumBestAPRP;
   }
   else
     return aprp <= targetAPRP;
