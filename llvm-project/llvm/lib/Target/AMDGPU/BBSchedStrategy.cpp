@@ -644,7 +644,6 @@ void GCNScheduleDAGMILive::schedule() {
   }
 
   ScheduleDAGMILive::schedule();
-
   Regions[RegionIdx] = std::make_pair(RegionBegin, RegionEnd);
   RescheduleRegions[RegionIdx] = false;
 
