@@ -1,3 +1,5 @@
 *.bc
 /build/*
 log*
+*.o
+*.exe
