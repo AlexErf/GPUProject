@@ -405,6 +405,9 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   std::stack<std::deque<SUnit*>> availableNodeStack; // available nodes are nodes that are available to be scheduled given the current schedule
   std::vector<SUnit*> bestScheduledInstructions;
   std::vector<SUnit*> currentScheduledInstructions;
+
+  std::stack<GCNDownwardRPTracker> trackerStack;
+  trackerStack.emplace(*LIS);
   readyNodeStack.emplace();
   availableNodeStack.emplace();
 
@@ -426,6 +429,8 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   LLVM_DEBUG(dbgs() << "Before: BB begin to RegionBegin distance" << std::distance(BB->begin(), RegionBegin) <<"\n");
   LLVM_DEBUG(dbgs() << "Before: RegionBegin to BB end distance " << std::distance(RegionBegin, BB->end()) <<"\n");
   RegionEnd = RegionBegin;
+
+  trackerStack.top().advance(begin(), end(), &LiveIns[RegionIdx]);
   
   while (!readyNodeStack.empty()) // correct condition?
   {
@@ -433,8 +438,10 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
       LLVM_DEBUG(dbgs() << "Popping stack.\n");
       readyNodeStack.pop();
       availableNodeStack.pop();
+      trackerStack.pop();
       if (!currentScheduledInstructions.empty()){
         currentScheduledInstructions.pop_back();
+        trackerStack.pop();
         --RegionEnd;
       }
       LLVM_DEBUG(dbgs() << "New readyNodeStack size: " << readyNodeStack.size() << "\n");
@@ -445,17 +452,21 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     
     scheduleInst(s->getInstr());
     currentScheduledInstructions.push_back(s);
+    trackerStack.push(trackerStack.top());
+    trackerStack.top().advance();
 
     // 1. don't call scheduleMI, but schedule instructions in the BB (see end of schedule function)
     // 2. ensure that RegionStart and RegionEnd are updated prior to checkNode call
     // TODO - fix first argument for ilp pass
     std::map<int, SUnit*> temp;
-    if (checkNode(s, /*schedule*/ temp, currentScheduledInstructions, targetLength, targetAPRP, bestAPRP, isOccupanyPass))
+    unsigned aprp = checkNode(s, /*schedule*/ temp, currentScheduledInstructions, targetLength, targetAPRP, bestAPRP, isOccupanyPass, trackerStack.top());
+    if (aprp < bestAPRP)
     {
       LLVM_DEBUG(dbgs() << "current sched len: " << currentScheduledInstructions.size() << ", total len: " << static_cast<size_t>(schedLength) << "\n");
       // check leaf
       if (currentScheduledInstructions.size() == static_cast<size_t>(schedLength)) {
-        unsigned regPressure = getRealRegPressure().getVGPRNum();
+        // unsigned regPressure = getRealRegPressure().getVGPRNum();
+        unsigned regPressure = aprp;
         if (regPressure < targetAPRP) {
           // bestScheduledInstructions = currentScheduledInstructions;
           LLVM_DEBUG(dbgs() << "Current schedule has lower RP than the target RP. Returning.\n");
@@ -465,11 +476,13 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
           bestAPRP = regPressure;
           bestScheduledInstructions = currentScheduledInstructions;
           foundBetterSchedule = true;
+          LLVM_DEBUG(dbgs() << "We found a better schedule! Don't bother to back track right now just return :)\n");
           // temporary return a better sched
           return bestAPRP;
         } else {
           currentScheduledInstructions.pop_back();
           --RegionEnd;
+          trackerStack.pop();
           continue;
         }
       }
@@ -505,6 +518,7 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     }
     else {
       RegionEnd --;
+      trackerStack.pop();
       currentScheduledInstructions.pop_back();
     }
   }
@@ -531,8 +545,8 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   }
 }
 
-bool GCNScheduleDAGMILive::checkNode(SUnit* node, const std::map<int, SUnit*>& scheduleSoFar, const std::vector<SUnit*>& currentScheduledInstructions, unsigned targetLength, unsigned targetAPRP, 
-                                unsigned enumBestAPRP, bool isOccupancyPass) {
+unsigned GCNScheduleDAGMILive::checkNode(SUnit* node, const std::map<int, SUnit*>& scheduleSoFar, const std::vector<SUnit*>& currentScheduledInstructions, unsigned targetLength, unsigned targetAPRP, 
+                                unsigned enumBestAPRP, bool isOccupancyPass, GCNDownwardRPTracker& rpTracker) {
   if (!isOccupancyPass) {
     LLVM_DEBUG(dbgs() << "checkNode() for ilp pass.\n");
  
@@ -565,7 +579,7 @@ bool GCNScheduleDAGMILive::checkNode(SUnit* node, const std::map<int, SUnit*>& s
     // LLVM_DEBUG(dbgs() << "checkNode() for occupancy pass.\n");
   }
   // 4. compute aprp
-  unsigned aprp = getRealRegPressure().getVGPRNum();
+  unsigned aprp = rpTracker.getMaxPressure().getVGPRNum(); //getRealRegPressure().getVGPRNum();
 
   // 3. check history??? - SKIP FOR NOW
   std::vector<MachineInstr*> history(currentScheduledInstructions.size());
@@ -583,13 +597,14 @@ bool GCNScheduleDAGMILive::checkNode(SUnit* node, const std::map<int, SUnit*>& s
       historyMap.emplace_hint(historyIter, std::move(history), aprp);
   }
 
-  // 5. wrap up stuff
-  if (isOccupancyPass) {
-    // LLVM_DEBUG(dbgs() << "checkNode() for occupancy pass just before return.\n");
-    return aprp < enumBestAPRP;
-  }
-  else
-    return aprp <= targetAPRP;
+  return aprp;
+  // // 5. wrap up stuff
+  // if (isOccupancyPass) {
+  //   // LLVM_DEBUG(dbgs() << "checkNode() for occupancy pass just before return.\n");
+  //   return aprp < enumBestAPRP;
+  // }
+  // else
+  //   return aprp <= targetAPRP;
 }
 
 void GCNScheduleDAGMILive::schedule() {

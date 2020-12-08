@@ -133,6 +133,11 @@ public:
     return Res;
   }
 
+  decltype(MaxPressure) getMaxPressure() {
+    auto Res = MaxPressure;
+    return Res;
+  }
+
   decltype(LiveRegs) moveLiveRegs() {
     return std::move(LiveRegs);
   }
