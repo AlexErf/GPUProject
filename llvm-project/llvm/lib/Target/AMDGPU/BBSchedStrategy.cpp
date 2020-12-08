@@ -303,7 +303,8 @@ GCNScheduleDAGMILive::GCNScheduleDAGMILive(MachineSchedContext *C,
   ST(MF.getSubtarget<GCNSubtarget>()),
   MFI(*MF.getInfo<SIMachineFunctionInfo>()),
   StartingOccupancy(MFI.getOccupancy()),
-  MinOccupancy(StartingOccupancy), Stage(Collect), RegionIdx(0) {
+  RPTracker(*LIS),
+  MinOccupancy(StartingOccupancy), Stage(Collect), RegionIdx(0), haveBacktracked(true) {
 
   LLVM_DEBUG(dbgs() << "Starting occupancy is " << StartingOccupancy << ".\n");
   LLVM_DEBUG(dbgs() << "Nathan and Alex's starting occupancy is: " << StartingOccupancy << ".\n");
@@ -381,6 +382,7 @@ void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI) {
       // Adjust for missing dead-def flags.
       RegOpers.detectDeadDefs(*MI, *LIS);
     }
+
   }
   // auto RegionEndBefore = RegionEnd;
   if (RegionBegin == RegionEnd) {

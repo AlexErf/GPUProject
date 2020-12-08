@@ -168,6 +168,8 @@ class GCNScheduleDAGMILive final : public ScheduleDAGMILive {
   bool checkNode(SUnit* node, const std::map<int, SUnit*>& scheduleSoFar, const std::vector<SUnit*>& currentScheduledInstructions, unsigned targetLength, unsigned targetAPRP, 
                                 unsigned enumBestAPRP, bool isOccupancyPass);
 
+GCNDownwardRPTracker RPTracker;
+bool haveBacktracked; // flag that tells us we need to reset the RPTracker
 public:
   GCNScheduleDAGMILive(MachineSchedContext *C,
                        std::unique_ptr<MachineSchedStrategy> S);
