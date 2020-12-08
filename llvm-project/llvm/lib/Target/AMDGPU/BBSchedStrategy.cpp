@@ -441,7 +441,6 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
       trackerStack.pop();
       if (!currentScheduledInstructions.empty()){
         currentScheduledInstructions.pop_back();
-        trackerStack.pop();
         --RegionEnd;
       }
       LLVM_DEBUG(dbgs() << "New readyNodeStack size: " << readyNodeStack.size() << "\n");
