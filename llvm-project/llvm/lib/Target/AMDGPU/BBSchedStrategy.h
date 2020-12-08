@@ -164,7 +164,7 @@ class GCNScheduleDAGMILive final : public ScheduleDAGMILive {
 
   unsigned computeDLB(std::map<int, SUnit*> scheduleSoFar);
 
-  bool checkNode(SUnit* node, std::map<int, SUnit*> scheduleSoFar, unsigned targetLength, unsigned targetAPRP, 
+  bool checkNode(SUnit* node, const std::map<int, SUnit*>& scheduleSoFar, const std::vector<SUnit*>& currentScheduledInstructions, unsigned targetLength, unsigned targetAPRP, 
                 unsigned enumBestAPRP, bool isOccupancyPass);
 
 public:

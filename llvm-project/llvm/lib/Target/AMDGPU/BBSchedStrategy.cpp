@@ -19,6 +19,7 @@
 #include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/Support/MathExtras.h"
+#include "hasher.h"
 #include <queue>
 #include <stack>
 #include <map>
@@ -450,7 +451,7 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     // 2. ensure that RegionStart and RegionEnd are updated prior to checkNode call
     // TODO - fix first argument for ilp pass
     std::map<int, SUnit*> temp;
-    if (checkNode(s, /*schedule*/ temp, targetLength, targetAPRP, bestAPRP, isOccupanyPass))
+    if (checkNode(s, /*schedule*/ temp, currentScheduledInstructions, targetLength, targetAPRP, bestAPRP, isOccupanyPass))
     {
       LLVM_DEBUG(dbgs() << "current sched len: " << currentScheduledInstructions.size() << ", total len: " << static_cast<size_t>(schedLength) << "\n");
       // check leaf
@@ -529,7 +530,7 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   }
 }
 
-bool GCNScheduleDAGMILive::checkNode(SUnit* node, std::map<int, SUnit*> scheduleSoFar, unsigned targetLength, unsigned targetAPRP, 
+bool GCNScheduleDAGMILive::checkNode(SUnit* node, const std::map<int, SUnit*>& scheduleSoFar, const std::vector<SUnit*>& currentScheduledInstructions, unsigned targetLength, unsigned targetAPRP, 
                                 unsigned enumBestAPRP, bool isOccupancyPass) {
   if (!isOccupancyPass) {
     LLVM_DEBUG(dbgs() << "checkNode() for ilp pass.\n");
@@ -562,11 +563,20 @@ bool GCNScheduleDAGMILive::checkNode(SUnit* node, std::map<int, SUnit*> schedule
   else {
     // LLVM_DEBUG(dbgs() << "checkNode() for occupancy pass.\n");
   }
-
-  // 3. check history??? - SKIP FOR NOW
-
   // 4. compute aprp
   unsigned aprp = getRealRegPressure().getVGPRNum();
+
+  // 3. check history??? - SKIP FOR NOW
+  std::vector<const MachineInstr*> history(currentScheduledInstructions.size());
+  std::transform(currentScheduledInstructions.begin(), currentScheduledInstructions.end(), history.begin(), [](const SUnit* s){return s->getInstr();});
+  std::sort(history.begin(), history.end());
+  static std::unordered_map<std::vector<const MachineInstr*>, unsigned, vector_ptr_hasher> historyMap;
+  auto historyIter = historyMap.find(history);
+  if(historyIter != historyMap.end()) {
+    if(historyIter->second <= aprp) return false;
+  } else {
+      historyMap.emplace_hint(historyIter, std::move(history), aprp);
+  }
 
   // 5. wrap up stuff
   if (isOccupancyPass) {
