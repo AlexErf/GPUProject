@@ -350,6 +350,8 @@ void GCNScheduleDAGMILive::ilpPass(SmallVector<SUnit*, 8> topRoots, std::vector<
   // }
 }
 
+// NOTE: bug happens when putting back initial schedule.  Don't use the tracker stuff if putting back initial schedule.
+
 /// schedule a instruction to RegionEnd pointer
 /// move teh RegionEnd pointer to the next inst
 void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI, GCNDownwardRPTracker& tracker) {
@@ -389,11 +391,13 @@ void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI, GCNDownwardRPTracker& 
     LLVM_DEBUG(dbgs() << "Resetting tracker to " << *RegionBegin << "\n");
     tracker.reset(*RegionBegin, &LiveIns[RegionIdx]);
   } else {
-    LLVM_DEBUG(dbgs() << "Last tracked before advance: " << *(tracker.getLastTrackedMI()) << " " << tracker.getLastTrackedMI() << "\n");
+    // LLVM_DEBUG(dbgs() << "Last tracked before advance: " << *(tracker.getLastTrackedMI()) << " " << tracker.getLastTrackedMI() << "\n");
   }
   if (RegionEnd != MI->getIterator()) {
-    tracker.NextMI --;
+    //tracker.NextMI --;
+    
   }
+  tracker.NextMI = MI;
   RegionEnd = MI->getIterator();
   ++RegionEnd;
 
