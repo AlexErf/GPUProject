@@ -341,18 +341,18 @@ void GCNScheduleDAGMILive::occupancyPass(SmallVector<SUnit*, 8> topRoots, SmallV
 }
 
 void GCNScheduleDAGMILive::ilpPass(SmallVector<SUnit*, 8> topRoots, std::vector<SUnit* > scheduleInst, int targetPressure) {
-  int lowerBound = std::distance(Regions[RegionIdx].first, Regions[RegionIdx].second);
-  int upperBound = satisfyLatency(scheduleInst);
-  for (int targetLength = lowerBound; targetLength < upperBound - 1; targetLength ++) {
+  // int lowerBound = std::distance(Regions[RegionIdx].first, Regions[RegionIdx].second);
+  // int upperBound = satisfyLatency(scheduleInst);
+  // for (int targetLength = lowerBound; targetLength < upperBound - 1; targetLength ++) {
     /* run B&B, if such schedule length exist, return */
     // if (enumerate())
-    //   return;
-  }
+      // return;
+  // }
 }
 
 /// schedule a instruction to RegionEnd pointer
 /// move teh RegionEnd pointer to the next inst
-void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI) {
+void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI, GCNDownwardRPTracker& tracker) {
   if (MI->isDebugInstr()) {
     LLVM_DEBUG(dbgs() << "Debug Instr " << *MI);
     //RegionEnd = MI->getIterator();
@@ -385,10 +385,24 @@ void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI) {
   // auto RegionEndBefore = RegionEnd;
   if (RegionBegin == RegionEnd) {
     RegionBegin = MI->getIterator();
+    RegionEnd = MI->getIterator();
+    LLVM_DEBUG(dbgs() << "Resetting tracker to " << *RegionBegin << "\n");
+    tracker.reset(*RegionBegin, &LiveIns[RegionIdx]);
+  } else {
+    LLVM_DEBUG(dbgs() << "Last tracked before advance: " << *(tracker.getLastTrackedMI()) << " " << tracker.getLastTrackedMI() << "\n");
+  }
+  if (RegionEnd != MI->getIterator()) {
+    tracker.NextMI --;
   }
   RegionEnd = MI->getIterator();
   ++RegionEnd;
-  LLVM_DEBUG(dbgs() << "Scheduling " << *MI);
+
+  bool advance = tracker.advance(RegionEnd);
+  LLVM_DEBUG(dbgs() << "RegionEnd " << *RegionEnd << "\n");
+  LLVM_DEBUG(dbgs() << "Scheduling " << *MI << " " << MI << "\n");
+  LLVM_DEBUG(dbgs() << "Last tracked: " << *(tracker.getLastTrackedMI()) << " " << tracker.getLastTrackedMI() << "\n");
+  LLVM_DEBUG(dbgs() << "Advance: " << advance << "\n");
+  assert(advance);
   // LLVM_DEBUG(dbgs() << "Region End Change: " << std::distance(RegionEndBefore, RegionEnd) << "\n");
 }
 
@@ -426,8 +440,8 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   for (auto &I : *this) {
     currentSched.push_back(&I);
   }
-  LLVM_DEBUG(dbgs() << "Before: BB begin to RegionBegin distance" << std::distance(BB->begin(), RegionBegin) <<"\n");
-  LLVM_DEBUG(dbgs() << "Before: RegionBegin to BB end distance " << std::distance(RegionBegin, BB->end()) <<"\n");
+  // LLVM_DEBUG(dbgs() << "Before: BB begin to RegionBegin distance" << std::distance(BB->begin(), RegionBegin) <<"\n");
+  // LLVM_DEBUG(dbgs() << "Before: RegionBegin to BB end distance " << std::distance(RegionBegin, BB->end()) <<"\n");
   RegionEnd = RegionBegin;
 
   trackerStack.top().advance(begin(), end(), &LiveIns[RegionIdx]);
@@ -438,8 +452,8 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
       LLVM_DEBUG(dbgs() << "Popping stack.\n");
       readyNodeStack.pop();
       availableNodeStack.pop();
-      trackerStack.pop();
       if (!currentScheduledInstructions.empty()){
+        trackerStack.pop();
         currentScheduledInstructions.pop_back();
         --RegionEnd;
       }
@@ -449,10 +463,23 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     SUnit* s = readyNodeStack.top().front();
     readyNodeStack.top().pop();
     
-    scheduleInst(s->getInstr());
-    currentScheduledInstructions.push_back(s);
     trackerStack.push(trackerStack.top());
-    trackerStack.top().advance();
+    scheduleInst(s->getInstr(), trackerStack.top());
+    currentScheduledInstructions.push_back(s);
+    // bool advance = trackerStack.top().advance();
+    // LLVM_DEBUG(dbgs() << "LastRealMI: " << *(currentScheduledInstructions.back() -> getInstr()) << "\n");
+    // LLVM_DEBUG(dbgs() << "LastCheckedMI: " <<  *(trackerStack.top().getLastTrackedMI()) << "\n");
+    // LLVM_DEBUG(dbgs() << "advance return: " << advance << "\n");
+    // assert(advance);
+
+    if (trackerStack.top().getLastTrackedMI() != currentScheduledInstructions.back()->getInstr()) {
+      LLVM_DEBUG(dbgs() << "AHA!" << "\n");
+      LLVM_DEBUG(dbgs() << "LastRealMI: " << *(currentScheduledInstructions.back() -> getInstr()) << "\n");
+      LLVM_DEBUG(dbgs() << "LastCheckedMI: " <<  *(trackerStack.top().getLastTrackedMI()) << "\n");
+    }
+    assert(trackerStack.top().getLastTrackedMI() == currentScheduledInstructions.back()->getInstr());
+
+
 
     // 1. don't call scheduleMI, but schedule instructions in the BB (see end of schedule function)
     // 2. ensure that RegionStart and RegionEnd are updated prior to checkNode call
@@ -472,10 +499,16 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
           return targetAPRP;
         }
         else if (regPressure < bestAPRP) {
+          auto copy = bestAPRP;
           bestAPRP = regPressure;
           bestScheduledInstructions = currentScheduledInstructions;
           foundBetterSchedule = true;
+
           LLVM_DEBUG(dbgs() << "We found a better schedule! Don't bother to back track right now just return :)\n");
+          LLVM_DEBUG(dbgs() << "LastRealMI: " << currentScheduledInstructions.back() -> getInstr() << "\n");
+          LLVM_DEBUG(dbgs() << "LastCheckedMI: " <<   trackerStack.top().getLastTrackedMI() << "\n");
+          LLVM_DEBUG(dbgs() << "Register Pressure: " << regPressure << " " << " old best pressure " << copy << "\n");
+          LLVM_DEBUG(dbgs() << "Real Pressure: " << getRealRegPressure().getVGPRNum() << "\n");
           // temporary return a better sched
           return bestAPRP;
         } else {
@@ -532,13 +565,17 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     LLVM_DEBUG(dbgs() << "After: Region Begin to BB block distance " << std::distance(RegionBegin, BB->end()) <<"\n");
     RegionEnd = RegionBegin;
     for (MachineInstr *MI : currentSched) {
-      scheduleInst(MI);
+      LiveIntervals l;
+      GCNDownwardRPTracker temp(l);
+      scheduleInst(MI, temp);
     }
     return bestAPRP;
   } else {
     RegionEnd = RegionBegin;
     for (SUnit *su : bestScheduledInstructions) {
-      scheduleInst(su->getInstr());
+      LiveIntervals l;
+      GCNDownwardRPTracker temp(l);
+      scheduleInst(su->getInstr(), temp);
     }
     return bestAPRP;
   }
@@ -675,44 +712,50 @@ void GCNScheduleDAGMILive::schedule() {
   // Check the results of scheduling.
   GCNMaxOccupancySchedStrategy &S = (GCNMaxOccupancySchedStrategy&)*SchedImpl;
   auto PressureAfter = getRealRegPressure();
-
-  LLVM_DEBUG(dbgs() << "Pressure after scheduling: ";
-             PressureAfter.print(dbgs()));
   
   occupancyPass(TopRoots, BotRoots, 24);
 
-  unsigned Occ = MFI.getOccupancy();
-  unsigned WavesAfter = std::min(Occ, PressureAfter.getOccupancy(ST));
-  unsigned WavesBefore = std::min(Occ, PressureBefore.getOccupancy(ST));
-  LLVM_DEBUG(dbgs() << "Occupancy before scheduling: " << WavesBefore
-                    << ", after " << WavesAfter << ".\n");
-  if(WavesAfter > WavesBefore) {
-      LLVM_DEBUG(dbgs() << "@@@ Occupancy improved!\n");
-      exit(1);
-  }
-  if (PressureAfter.getSGPRNum() <= S.SGPRCriticalLimit &&
-      PressureAfter.getVGPRNum() <= S.VGPRCriticalLimit) {
-    Pressure[RegionIdx] = PressureAfter;
-    LLVM_DEBUG(dbgs() << "Pressure in desired limits, done.\n");
-    return;
-  }
+  //LLVM_DEBUG(dbgs() << "Pressure before scheduling: ";
+  //           PressureBefore.print(dbgs()));
+  LLVM_DEBUG(dbgs() << "Pressure after heuristic scheduling: ";
+             PressureAfter.print(dbgs()));
+  auto PressureAfterOccupancyPass = getRealRegPressure();
+  LLVM_DEBUG(dbgs() << "Pressure after occupancy pass scheduling: ";
+             PressureAfterOccupancyPass.print(dbgs()));
 
+  unsigned Occ = MFI.getOccupancy();
+  unsigned WavesAfterHeuristic = std::min(Occ, PressureAfter.getOccupancy(ST));
+  unsigned WavesAfterOccupancyPass = std::min(Occ, PressureAfterOccupancyPass.getOccupancy(ST));
+
+  LLVM_DEBUG(dbgs() << "Occupancy before occupancy pass: " << WavesAfterHeuristic << ", after " << WavesAfterOccupancyPass << ".\n");
+
+
+  if(WavesAfterOccupancyPass > WavesAfterHeuristic) {
+      LLVM_DEBUG(dbgs() << "@@@ Occupancy improved!\n");
+  }
+  // if (PressureAfter.getSGPRNum() <= S.SGPRCriticalLimit &&
+  //     PressureAfter.getVGPRNum() <= S.VGPRCriticalLimit) {
+    Pressure[RegionIdx] = PressureAfterOccupancyPass;
+    // LLVM_DEBUG(dbgs() << "Pressure in desired limits, done.\n");
+    return;
+  // }
+  /*
   // We could not keep current target occupancy because of the just scheduled
   // region. Record new occupancy for next scheduling cycle.
-  unsigned NewOccupancy = std::max(WavesAfter, WavesBefore);
+  // unsigned NewOccupancy = std::max(WavesAfter, WavesBefore);
   // Allow memory bound functions to drop to 4 waves if not limited by an
   // attribute.
   if (WavesAfter < WavesBefore && WavesAfter < MinOccupancy &&
       WavesAfter >= MFI.getMinAllowedOccupancy()) {
-    LLVM_DEBUG(dbgs() << "Function is memory bound, allow occupancy drop up to "
-                      << MFI.getMinAllowedOccupancy() << " waves\n");
+    // LLVM_DEBUG(dbgs() << "Function is memory bound, allow occupancy drop up to "
+    //                   << MFI.getMinAllowedOccupancy() << " waves\n");
     NewOccupancy = WavesAfter;
   }
   if (NewOccupancy < MinOccupancy) {
     MinOccupancy = NewOccupancy;
     MFI.limitOccupancy(MinOccupancy);
-    LLVM_DEBUG(dbgs() << "Occupancy lowered for the function to "
-                      << MinOccupancy << ".\n");
+    // LLVM_DEBUG(dbgs() << "Occupancy lowered for the function to "
+    //                  << MinOccupancy << ".\n");
   }
 
   unsigned MaxVGPRs = ST.getMaxNumVGPRs(MF);
@@ -735,7 +778,7 @@ void GCNScheduleDAGMILive::schedule() {
     }
   }
   
-  /*
+
   LLVM_DEBUG(dbgs() << "Attempting to revert scheduling.\n");
   RescheduleRegions[RegionIdx] = true;
   RegionEnd = RegionBegin;
@@ -769,11 +812,11 @@ void GCNScheduleDAGMILive::schedule() {
     ++RegionEnd;
     LLVM_DEBUG(dbgs() << "Scheduling " << *MI);
   }
-  */
   RegionBegin = Unsched.front()->getIterator();
   Regions[RegionIdx] = std::make_pair(RegionBegin, RegionEnd);
 
   placeDebugValues();
+  */
 }
 
 GCNRegPressure GCNScheduleDAGMILive::getRealRegPressure() const {

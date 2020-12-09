@@ -164,11 +164,12 @@ public:
 
 class GCNDownwardRPTracker : public GCNRPTracker {
   // Last position of reset or advanceBeforeNext
-  MachineBasicBlock::const_iterator NextMI;
 
   MachineBasicBlock::const_iterator MBBEnd;
 
 public:
+  MachineBasicBlock::const_iterator NextMI;
+
   GCNDownwardRPTracker(const LiveIntervals &LIS_) : GCNRPTracker(LIS_) {}
 
   const MachineBasicBlock::const_iterator getNext() const { return NextMI; }
