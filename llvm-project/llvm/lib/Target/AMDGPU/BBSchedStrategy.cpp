@@ -354,7 +354,7 @@ void GCNScheduleDAGMILive::ilpPass(SmallVector<SUnit*, 8> topRoots, std::vector<
 
 /// schedule a instruction to RegionEnd pointer
 /// move teh RegionEnd pointer to the next inst
-void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI, GCNDownwardRPTracker& tracker) {
+void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI, GCNDownwardRPTracker& tracker, bool shouldTrack) {
   if (MI->isDebugInstr()) {
     LLVM_DEBUG(dbgs() << "Debug Instr " << *MI);
     //RegionEnd = MI->getIterator();
@@ -389,25 +389,38 @@ void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI, GCNDownwardRPTracker& 
     RegionBegin = MI->getIterator();
     RegionEnd = MI->getIterator();
     LLVM_DEBUG(dbgs() << "Resetting tracker to " << *RegionBegin << "\n");
-    tracker.reset(*RegionBegin, &LiveIns[RegionIdx]);
+    if (shouldTrack)
+      tracker.reset(*RegionBegin, &LiveIns[RegionIdx]);
   } else {
     // LLVM_DEBUG(dbgs() << "Last tracked before advance: " << *(tracker.getLastTrackedMI()) << " " << tracker.getLastTrackedMI() << "\n");
   }
-  if (RegionEnd != MI->getIterator()) {
-    //tracker.NextMI --;
-    
-  }
-  tracker.NextMI = MI;
+  if (shouldTrack)
+    tracker.NextMI = MI;
   RegionEnd = MI->getIterator();
   ++RegionEnd;
 
-  bool advance = tracker.advance(RegionEnd);
-  LLVM_DEBUG(dbgs() << "RegionEnd " << *RegionEnd << "\n");
+  if (shouldTrack)
+  {
+    bool advance = tracker.advance(RegionEnd);
+    // LLVM_DEBUG(dbgs() << "Last tracked: " << *(tracker.getLastTrackedMI()) << " " << tracker.getLastTrackedMI() << "\n");
+    // LLVM_DEBUG(dbgs() << "Advance: " << advance << "\n");
+    assert(advance);
+    
+  }
+  // LLVM_DEBUG(dbgs() << "RegionEnd " << *RegionEnd << "\n");
   LLVM_DEBUG(dbgs() << "Scheduling " << *MI << " " << MI << "\n");
-  LLVM_DEBUG(dbgs() << "Last tracked: " << *(tracker.getLastTrackedMI()) << " " << tracker.getLastTrackedMI() << "\n");
-  LLVM_DEBUG(dbgs() << "Advance: " << advance << "\n");
-  assert(advance);
   // LLVM_DEBUG(dbgs() << "Region End Change: " << std::distance(RegionEndBefore, RegionEnd) << "\n");
+}
+
+void dumpReadyNodeStack(std::queue<SUnit*>& readyNodes) {
+  LLVM_DEBUG(dbgs() << "Ready nodes are: \n";
+  const auto numElems = readyNodes.size();
+  for(size_t i = 0; i < numElems; ++i) {
+    dbgs() << *readyNodes.front()->getInstr();
+    readyNodes.emplace(readyNodes.front());
+    readyNodes.pop();
+  }
+  dbgs() << "Done printing ready nodes\n";);
 }
 
 unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BottomRoots,
@@ -429,13 +442,17 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   readyNodeStack.emplace();
   availableNodeStack.emplace();
 
+  LLVM_DEBUG(dbgs() << "Adding top roots: << \n");
   for (SUnit* s: TopRoots)
   {
     // nodesToAdd.push(s);
     readyNodeStack.top().push(s);
     availableNodeStack.top().push_back(s);
+
+    LLVM_DEBUG(dbgs() << *s->getInstr() << "\n");
   } // add possible starting SUnits
-  
+  LLVM_DEBUG(dbgs() << "End top roots << \n");
+  LLVM_DEBUG(dumpReadyNodeStack(readyNodeStack.top()));
   MachineBasicBlock::iterator RegionBeginClone = RegionBegin;
   int schedLength = std::distance(RegionBegin, RegionEnd);
 
@@ -477,7 +494,6 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     // assert(advance);
 
     if (trackerStack.top().getLastTrackedMI() != currentScheduledInstructions.back()->getInstr()) {
-      LLVM_DEBUG(dbgs() << "AHA!" << "\n");
       LLVM_DEBUG(dbgs() << "LastRealMI: " << *(currentScheduledInstructions.back() -> getInstr()) << "\n");
       LLVM_DEBUG(dbgs() << "LastCheckedMI: " <<  *(trackerStack.top().getLastTrackedMI()) << "\n");
     }
@@ -492,6 +508,7 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     unsigned aprp = checkNode(s, /*schedule*/ temp, currentScheduledInstructions, targetLength, targetAPRP, bestAPRP, isOccupanyPass, trackerStack.top());
     if (aprp < bestAPRP)
     {
+      LLVM_DEBUG(dumpReadyNodeStack(readyNodeStack.top()));
       LLVM_DEBUG(dbgs() << "current sched len: " << currentScheduledInstructions.size() << ", total len: " << static_cast<size_t>(schedLength) << "\n");
       // check leaf
       if (currentScheduledInstructions.size() == static_cast<size_t>(schedLength)) {
@@ -500,6 +517,12 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
         if (regPressure < targetAPRP) {
           // bestScheduledInstructions = currentScheduledInstructions;
           LLVM_DEBUG(dbgs() << "Current schedule has lower RP than the target RP. Returning.\n");
+          LLVM_DEBUG(dbgs() << "Current aprp: "<< aprp << " target aprp: " << targetAPRP << "\n");
+          LLVM_DEBUG(dbgs() << "LastRealMI: " << currentScheduledInstructions.back() -> getInstr() << "\n");
+          LLVM_DEBUG(dbgs() << "LastCheckedMI: " <<   trackerStack.top().getLastTrackedMI() << "\n");
+          LLVM_DEBUG(dbgs() << "Real Pressure: " << getRealRegPressure().getVGPRNum() << "\n");
+          LLVM_DEBUG(dbgs() << "After: BB Begin to RegionBegin distance " << std::distance(BB->begin(), RegionBegin) <<"\n");
+          LLVM_DEBUG(dbgs() << "After: Region Begin to BB end distance " << std::distance(RegionBegin, BB->end()) <<"\n");
           return targetAPRP;
         }
         else if (regPressure < bestAPRP) {
@@ -513,6 +536,8 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
           LLVM_DEBUG(dbgs() << "LastCheckedMI: " <<   trackerStack.top().getLastTrackedMI() << "\n");
           LLVM_DEBUG(dbgs() << "Register Pressure: " << regPressure << " " << " old best pressure " << copy << "\n");
           LLVM_DEBUG(dbgs() << "Real Pressure: " << getRealRegPressure().getVGPRNum() << "\n");
+          LLVM_DEBUG(dbgs() << "After: BB Begin to RegionBegin distance " << std::distance(BB->begin(), RegionBegin) <<"\n");
+          LLVM_DEBUG(dbgs() << "After: Region Begin to BB end distance " << std::distance(RegionBegin, BB->end()) <<"\n");
           // temporary return a better sched
           return bestAPRP;
         } else {
@@ -536,6 +561,7 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
       readyNodeStack.emplace(availableNodeStack.top());
       LLVM_DEBUG(dbgs() << "Adding to readyNodeStack.  New size: " << readyNodeStack.size() << "\n");
       // still promising, add successors to ready queue (not sure if this is best/right way to proceed)
+      std::set<SUnit*> toAdd;
       for (auto dep: s->Succs)
       {
         SUnit* succ = dep.getSUnit();
@@ -546,16 +572,36 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
             hasSched = false;
           }
         }
+        LLVM_DEBUG(dumpReadyNodeStack(readyNodeStack.top()));
         if (hasSched){
-          readyNodeStack.top().push(succ);
-          availableNodeStack.top().push_back(succ);
+          // assert (find(readyNodeStack.top().begin(), readyNodeStack.top().end(), succ) == readyNodeStack.top().end());
+          toAdd.insert(succ);
+          // readyNodeStack.top().push(succ);
+          // availableNodeStack.top().push_back(succ);
+
+          LLVM_DEBUG(dbgs() << "Adding instruction to stack: " << *succ->getInstr() << "\n");
+          for (auto pred_dep : succ -> Preds) {
+            LLVM_DEBUG(dbgs() << "Pred: " << *pred_dep.getSUnit()->getInstr() << "\n");
+          }
+
+          LLVM_DEBUG(dbgs() << "Begin current schedule");
+          for (auto currentInst: currentScheduledInstructions)
+          {
+            LLVM_DEBUG(dbgs() << *currentInst->getInstr());
+          }
+          LLVM_DEBUG(dbgs() << "End current schedule");
         }
+      }
+      for(auto s : toAdd) {
+        availableNodeStack.top().push_back(s);
+        readyNodeStack.top().push(s);
       }
     }
     else {
       RegionEnd --;
       trackerStack.pop();
       currentScheduledInstructions.pop_back();
+      LLVM_DEBUG(dbgs() << "Check node failed - going back!\n");
     }
   }
 
@@ -566,12 +612,12 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     //LLVM_DEBUG(dbgs() << "Current Region Begin: " << &RegionBegin << "\n");
     LLVM_DEBUG(dbgs() << std::distance(RegionBegin, RegionBeginClone) <<"\n");
     LLVM_DEBUG(dbgs() << "After: BB Begin to RegionBegin distance " << std::distance(BB->begin(), RegionBegin) <<"\n");
-    LLVM_DEBUG(dbgs() << "After: Region Begin to BB block distance " << std::distance(RegionBegin, BB->end()) <<"\n");
+    LLVM_DEBUG(dbgs() << "After: Region Begin to BB end distance " << std::distance(RegionBegin, BB->end()) <<"\n");
     RegionEnd = RegionBegin;
     for (MachineInstr *MI : currentSched) {
       LiveIntervals l;
       GCNDownwardRPTracker temp(l);
-      scheduleInst(MI, temp);
+      scheduleInst(MI, temp, false);
     }
     return bestAPRP;
   } else {
@@ -579,7 +625,7 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     for (SUnit *su : bestScheduledInstructions) {
       LiveIntervals l;
       GCNDownwardRPTracker temp(l);
-      scheduleInst(su->getInstr(), temp);
+      scheduleInst(su->getInstr(), temp, false);
     }
     return bestAPRP;
   }
@@ -631,7 +677,7 @@ unsigned GCNScheduleDAGMILive::checkNode(SUnit* node, const std::map<int, SUnit*
     LLVM_DEBUG(dbgs() << "Find entry in history table. APRP: " << historyIter->second << "\n");
     if(historyIter->second <= aprp) {
       LLVM_DEBUG(dbgs() << "Pruned based on history table. Current APRP: " << aprp << "\n.");
-      return false;
+      return UINT_MAX;
     }
   } else {
       historyMap.emplace_hint(historyIter, std::move(history), aprp);
@@ -709,7 +755,7 @@ void GCNScheduleDAGMILive::schedule() {
   SmallVector<SUnit*, 8> TopRoots;
   SmallVector<SUnit*, 8> BotRoots;
   findRootsAndBiasEdges(TopRoots, BotRoots);
-
+  viewGraph("DAG.dot", "THE DAG");
   if (!LIS)
     return;
 
@@ -717,7 +763,7 @@ void GCNScheduleDAGMILive::schedule() {
   GCNMaxOccupancySchedStrategy &S = (GCNMaxOccupancySchedStrategy&)*SchedImpl;
   auto PressureAfter = getRealRegPressure();
   
-  occupancyPass(TopRoots, BotRoots, 24);
+  occupancyPass(TopRoots, BotRoots, PressureAfter.getVGPRNum());
 
   //LLVM_DEBUG(dbgs() << "Pressure before scheduling: ";
   //           PressureBefore.print(dbgs()));

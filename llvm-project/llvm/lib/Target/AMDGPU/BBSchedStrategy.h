@@ -148,7 +148,7 @@ class GCNScheduleDAGMILive final : public ScheduleDAGMILive {
   void ilpPass(SmallVector<SUnit*, 8> topRoots, std::vector<SUnit* > scheduleInst, int targetPressure);
   unsigned enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BottomRoots,
                                       unsigned targetLength, unsigned targetAPRP, bool isOccupanyPass);
-  void scheduleInst(MachineInstr* MI, GCNDownwardRPTracker& tracker);
+  void scheduleInst(MachineInstr* MI, GCNDownwardRPTracker& tracker, bool shouldTrack=true);
   int satisfyLatency(std::vector<SUnit*> schedule);
 
   void restoreLatencies(SmallVector<llvm::SUnit *, 8> &topRoots, std::map<SUnit*, node*> mapSUnitToNode);
