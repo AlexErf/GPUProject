@@ -148,7 +148,7 @@ class GCNScheduleDAGMILive final : public ScheduleDAGMILive {
   void ilpPass(SmallVector<SUnit*, 8> topRoots, std::vector<SUnit* > scheduleInst, int targetPressure);
   unsigned enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BottomRoots,
                                       unsigned targetLength, unsigned targetAPRP, bool isOccupanyPass);
-  void scheduleInst(MachineInstr* MI);
+  void scheduleInst(MachineInstr* MI, GCNDownwardRPTracker& tracker, bool shouldTrack=true);
   int satisfyLatency(std::vector<SUnit*> schedule);
 
   void restoreLatencies(SmallVector<llvm::SUnit *, 8> &topRoots, std::map<SUnit*, node*> mapSUnitToNode);
@@ -165,8 +165,9 @@ class GCNScheduleDAGMILive final : public ScheduleDAGMILive {
   unsigned computeDLB(std::map<int, SUnit*> scheduleSoFar);
 
 
-  bool checkNode(SUnit* node, const std::map<int, SUnit*>& scheduleSoFar, const std::vector<SUnit*>& currentScheduledInstructions, unsigned targetLength, unsigned targetAPRP, 
-                                unsigned enumBestAPRP, bool isOccupancyPass);
+  unsigned checkNode(SUnit* node, const std::map<int, SUnit*>& scheduleSoFar, const std::vector<SUnit*>& currentScheduledInstructions, unsigned targetLength, unsigned targetAPRP, 
+                                unsigned enumBestAPRP, bool isOccupancyPass, GCNDownwardRPTracker& rpTracker);
+
 
 GCNDownwardRPTracker RPTracker;
 bool haveBacktracked; // flag that tells us we need to reset the RPTracker
