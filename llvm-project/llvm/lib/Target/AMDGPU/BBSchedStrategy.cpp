@@ -28,7 +28,7 @@
 #include <chrono>
 
 
-#define DEBUG_TYPE "machine-scheduler"
+#define DEBUG_TYPE "demo"
 
 using namespace llvm;
 
@@ -171,7 +171,6 @@ void GCNMaxOccupancySchedStrategy::pickNodeFromQueue(SchedBoundary &Zone,
       if (TryCand.ResDelta == SchedResourceDelta())
         TryCand.initResourceDelta(Zone.DAG, SchedModel);
       Cand.setBest(TryCand);
-      LLVM_DEBUG(traceCandidate(Cand));
     }
   }
 }
@@ -199,14 +198,12 @@ SUnit *GCNMaxOccupancySchedStrategy::pickNodeBidirectional(bool &IsTopNode) {
   setPolicy(TopPolicy, /*IsPostRA=*/false, Top, &Bot);
 
   // See if BotCand is still valid (because we previously scheduled from Top).
-  LLVM_DEBUG(dbgs() << "Picking from Bot:\n");
   if (!BotCand.isValid() || BotCand.SU->isScheduled ||
       BotCand.Policy != BotPolicy) {
     BotCand.reset(CandPolicy());
     pickNodeFromQueue(Bot, BotPolicy, DAG->getBotRPTracker(), BotCand);
     assert(BotCand.Reason != NoCand && "failed to find the first candidate");
   } else {
-    LLVM_DEBUG(traceCandidate(BotCand));
 #ifndef NDEBUG
     if (VerifyScheduling) {
       SchedCandidate TCand;
@@ -219,14 +216,12 @@ SUnit *GCNMaxOccupancySchedStrategy::pickNodeBidirectional(bool &IsTopNode) {
   }
 
   // Check if the top Q has a better candidate.
-  LLVM_DEBUG(dbgs() << "Picking from Top:\n");
   if (!TopCand.isValid() || TopCand.SU->isScheduled ||
       TopCand.Policy != TopPolicy) {
     TopCand.reset(CandPolicy());
     pickNodeFromQueue(Top, TopPolicy, DAG->getTopRPTracker(), TopCand);
     assert(TopCand.Reason != NoCand && "failed to find the first candidate");
   } else {
-    LLVM_DEBUG(traceCandidate(TopCand));
 #ifndef NDEBUG
     if (VerifyScheduling) {
       SchedCandidate TCand;
@@ -238,16 +233,12 @@ SUnit *GCNMaxOccupancySchedStrategy::pickNodeBidirectional(bool &IsTopNode) {
 #endif
   }
 
-  // Pick best from BotCand and TopCand.
-  LLVM_DEBUG(dbgs() << "Top Cand: "; traceCandidate(TopCand);
-             dbgs() << "Bot Cand: "; traceCandidate(BotCand););
   SchedCandidate Cand = BotCand;
   TopCand.Reason = NoCand;
   GenericScheduler::tryCandidate(Cand, TopCand, nullptr);
   if (TopCand.Reason != NoCand) {
     Cand.setBest(TopCand);
   }
-  LLVM_DEBUG(dbgs() << "Picking: "; traceCandidate(Cand););
 
   IsTopNode = Cand.AtTop;
   return Cand.SU;
@@ -293,8 +284,6 @@ SUnit *GCNMaxOccupancySchedStrategy::pickNode(bool &IsTopNode) {
   if (SU->isBottomReady())
     Bot.removeReady(SU);
 
-  LLVM_DEBUG(dbgs() << "Scheduling SU(" << SU->NodeNum << ") "
-                    << *SU->getInstr());
   return SU;
 }
 
@@ -306,11 +295,6 @@ GCNScheduleDAGMILive::GCNScheduleDAGMILive(MachineSchedContext *C,
   StartingOccupancy(MFI.getOccupancy()),
   RPTracker(*LIS),
   MinOccupancy(StartingOccupancy), Stage(Collect), RegionIdx(0), haveBacktracked(true) {
-
-  LLVM_DEBUG(dbgs() << "Starting occupancy is " << StartingOccupancy << ".\n");
-  LLVM_DEBUG(dbgs() << "Nathan and Alex's starting occupancy is: " << StartingOccupancy << ".\n");
-  LLVM_DEBUG(dbgs() << "Nathan and Alex's starting occupancy is ALSO ALSO: " << StartingOccupancy << ".\n");
-  LLVM_DEBUG(dbgs() << "AHHHHH " << StartingOccupancy << ".\n");
 }
 
 /*
@@ -336,20 +320,9 @@ GCNScheduleDAGMILive::GCNScheduleDAGMILive(MachineSchedContext *C,
  */
 
 void GCNScheduleDAGMILive::occupancyPass(SmallVector<SUnit*, 8> topRoots, SmallVector<SUnit*, 8> bottomRoots, unsigned targetPressure) {
-  LLVM_DEBUG(dbgs() << "occupancy pass called\n");
-  std::map<SUnit*, node*> mapSUnitToNode = setLatenciesToOne(topRoots);
+  // std::map<SUnit*, node*> mapSUnitToNode = setLatenciesToOne(topRoots);
   enumerate(topRoots, bottomRoots, 0, targetPressure, true);
-  restoreLatencies(topRoots, mapSUnitToNode);
-}
-
-void GCNScheduleDAGMILive::ilpPass(SmallVector<SUnit*, 8> topRoots, std::vector<SUnit* > scheduleInst, int targetPressure) {
-  // int lowerBound = std::distance(Regions[RegionIdx].first, Regions[RegionIdx].second);
-  // int upperBound = satisfyLatency(scheduleInst);
-  // for (int targetLength = lowerBound; targetLength < upperBound - 1; targetLength ++) {
-    /* run B&B, if such schedule length exist, return */
-    // if (enumerate())
-      // return;
-  // }
+  // restoreLatencies(topRoots, mapSUnitToNode);
 }
 
 // NOTE: bug happens when putting back initial schedule.  Don't use the tracker stuff if putting back initial schedule.
@@ -358,7 +331,6 @@ void GCNScheduleDAGMILive::ilpPass(SmallVector<SUnit*, 8> topRoots, std::vector<
 /// move teh RegionEnd pointer to the next inst
 void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI, GCNDownwardRPTracker& tracker, bool shouldTrack) {
   if (MI->isDebugInstr()) {
-    LLVM_DEBUG(dbgs() << "Debug Instr " << *MI);
     //RegionEnd = MI->getIterator();
     //++RegionEnd;
     return;
@@ -391,12 +363,9 @@ void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI, GCNDownwardRPTracker& 
   if (RegionBegin == RegionEnd) {
     RegionBegin = MI->getIterator();
     RegionEnd = MI->getIterator();
-    LLVM_DEBUG(dbgs() << "Resetting tracker to " << *RegionBegin << "\n");
     if (shouldTrack)
       tracker.reset(*RegionBegin, &LiveIns[RegionIdx]);
-  } else {
-    // LLVM_DEBUG(dbgs() << "Last tracked before advance: " << *(tracker.getLastTrackedMI()) << " " << tracker.getLastTrackedMI() << "\n");
-  }
+  } 
   if (shouldTrack)
     tracker.NextMI = MI;
   RegionEnd = MI->getIterator();
@@ -405,25 +374,8 @@ void GCNScheduleDAGMILive::scheduleInst(MachineInstr* MI, GCNDownwardRPTracker& 
   if (shouldTrack)
   {
     bool advance = tracker.advance(RegionEnd);
-    // LLVM_DEBUG(dbgs() << "Last tracked: " << *(tracker.getLastTrackedMI()) << " " << tracker.getLastTrackedMI() << "\n");
-    // LLVM_DEBUG(dbgs() << "Advance: " << advance << "\n");
     assert(advance);
-    
   }
-  // LLVM_DEBUG(dbgs() << "RegionEnd " << *RegionEnd << "\n");
-  LLVM_DEBUG(dbgs() << "Scheduling " << *MI << " " << MI << "\n");
-  // LLVM_DEBUG(dbgs() << "Region End Change: " << std::distance(RegionEndBefore, RegionEnd) << "\n");
-}
-
-void dumpReadyNodeStack(std::queue<SUnit*>& readyNodes) {
-  LLVM_DEBUG(dbgs() << "Ready nodes are: \n";
-  const auto numElems = readyNodes.size();
-  for(size_t i = 0; i < numElems; ++i) {
-    dbgs() << *readyNodes.front()->getInstr();
-    readyNodes.emplace(readyNodes.front());
-    readyNodes.pop();
-  }
-  dbgs() << "Done printing ready nodes\n";);
 }
 
 unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallVector<SUnit*, 8> BottomRoots,
@@ -445,17 +397,11 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   readyNodeStack.emplace();
   availableNodeStack.emplace();
 
-  // LLVM_DEBUG(dbgs() << "Adding top roots: << \n");
   for (SUnit* s: TopRoots)
   {
-    // nodesToAdd.push(s);
     readyNodeStack.top().push(s);
     availableNodeStack.top().push_back(s);
-
-    // LLVM_DEBUG(dbgs() << *s->getInstr() << "\n");
   } // add possible starting SUnits
-  // LLVM_DEBUG(dbgs() << "End top roots << \n");
-  // LLVM_DEBUG(dumpReadyNodeStack(readyNodeStack.top()));
   MachineBasicBlock::iterator RegionBeginClone = RegionBegin;
   int schedLength = std::distance(RegionBegin, RegionEnd);
 
@@ -465,16 +411,12 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   
   //unsigned timeLimit = msPerInst * static_cast<unsigned>(schedLength);
   unsigned timeLimit = 2000;
-  LLVM_DEBUG(dbgs() << "Setting timeLimit: " <<  timeLimit << "\n");
-  //std::duration<miliseconds> timeLimitDuration(timeLimit);
 
   std::vector<MachineInstr*> currentSched;
   currentSched.reserve(NumRegionInstrs);
   for (auto &I : *this) {
     currentSched.push_back(&I);
   }
-  // LLVM_DEBUG(dbgs() << "Before: BB begin to RegionBegin distance" << std::distance(BB->begin(), RegionBegin) <<"\n");
-  // LLVM_DEBUG(dbgs() << "Before: RegionBegin to BB end distance " << std::distance(RegionBegin, BB->end()) <<"\n");
   RegionEnd = RegionBegin;
 
   trackerStack.top().advance(begin(), end(), &LiveIns[RegionIdx]);
@@ -492,7 +434,6 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
       break;
     }
     if (readyNodeStack.top().empty()) {
-      LLVM_DEBUG(dbgs() << "Popping stack.\n");
       readyNodeStack.pop();
       availableNodeStack.pop();
       if (!currentScheduledInstructions.empty()){
@@ -500,7 +441,6 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
         currentScheduledInstructions.pop_back();
         --RegionEnd;
       }
-      LLVM_DEBUG(dbgs() << "New readyNodeStack size: " << readyNodeStack.size() << "\n");
       continue;
     }
     SUnit* s = readyNodeStack.top().front();
@@ -509,18 +449,8 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     trackerStack.push(trackerStack.top());
     scheduleInst(s->getInstr(), trackerStack.top());
     currentScheduledInstructions.push_back(s);
-    // bool advance = trackerStack.top().advance();
-    // LLVM_DEBUG(dbgs() << "LastRealMI: " << *(currentScheduledInstructions.back() -> getInstr()) << "\n");
-    // LLVM_DEBUG(dbgs() << "LastCheckedMI: " <<  *(trackerStack.top().getLastTrackedMI()) << "\n");
-    // LLVM_DEBUG(dbgs() << "advance return: " << advance << "\n");
-    // assert(advance);
 
-    if (trackerStack.top().getLastTrackedMI() != currentScheduledInstructions.back()->getInstr()) {
-      LLVM_DEBUG(dbgs() << "LastRealMI: " << *(currentScheduledInstructions.back() -> getInstr()) << "\n");
-      LLVM_DEBUG(dbgs() << "LastCheckedMI: " <<  *(trackerStack.top().getLastTrackedMI()) << "\n");
-    }
     assert(trackerStack.top().getLastTrackedMI() == currentScheduledInstructions.back()->getInstr());
-
 
 
     // 1. don't call scheduleMI, but schedule instructions in the BB (see end of schedule function)
@@ -530,21 +460,12 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     unsigned aprp = checkNode(s, /*schedule*/ temp, currentScheduledInstructions, targetLength, targetAPRP, bestAPRP, isOccupanyPass, trackerStack.top());
     if (aprp < bestAPRP)
     {
-      LLVM_DEBUG(dumpReadyNodeStack(readyNodeStack.top()));
-      LLVM_DEBUG(dbgs() << "current sched len: " << currentScheduledInstructions.size() << ", total len: " << static_cast<size_t>(schedLength) << "\n");
       // check leaf
       if (currentScheduledInstructions.size() == static_cast<size_t>(schedLength)) {
         // unsigned regPressure = getRealRegPressure().getVGPRNum();
         unsigned regPressure = aprp;
         if (regPressure < targetAPRP) {
           // bestScheduledInstructions = currentScheduledInstructions;
-          LLVM_DEBUG(dbgs() << "Current schedule has lower RP than the target RP. Returning.\n");
-          LLVM_DEBUG(dbgs() << "Current aprp: "<< aprp << " target aprp: " << targetAPRP << "\n");
-          LLVM_DEBUG(dbgs() << "LastRealMI: " << currentScheduledInstructions.back() -> getInstr() << "\n");
-          LLVM_DEBUG(dbgs() << "LastCheckedMI: " <<   trackerStack.top().getLastTrackedMI() << "\n");
-          LLVM_DEBUG(dbgs() << "Real Pressure: " << getRealRegPressure().getVGPRNum() << "\n");
-          LLVM_DEBUG(dbgs() << "After: BB Begin to RegionBegin distance " << std::distance(BB->begin(), RegionBegin) <<"\n");
-          LLVM_DEBUG(dbgs() << "After: Region Begin to BB end distance " << std::distance(RegionBegin, BB->end()) <<"\n");
           return targetAPRP;
         }
         else if (regPressure < bestAPRP) {
@@ -553,20 +474,8 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
           bestScheduledInstructions = currentScheduledInstructions;
           foundBetterSchedule = true;
           //timeLimit = max((now-begin) *1.5, timeLimit);
-          timeLimit = static_cast<unsigned>((now - start).count() * 1.25) + 3000;
           milliseconds now = duration_cast< milliseconds >( system_clock::now().time_since_epoch());
-          LLVM_DEBUG(dbgs() << "Found a better schedule.\n");
-          LLVM_DEBUG(dbgs() << "Time passed so far = " << (now - start).count() <<"\n");
-          LLVM_DEBUG(dbgs() << "New time limit = " << timeLimit <<"\n");
-          // LLVM_DEBUG(dbgs() << "We found a better schedule! Don't bother to back track right now just return :)\n");
-          LLVM_DEBUG(dbgs() << "LastRealMI: " << currentScheduledInstructions.back() -> getInstr() << "\n");
-          LLVM_DEBUG(dbgs() << "LastCheckedMI: " <<   trackerStack.top().getLastTrackedMI() << "\n");
-          LLVM_DEBUG(dbgs() << "Register Pressure: " << regPressure << " " << " old best pressure " << copy << "\n");
-          LLVM_DEBUG(dbgs() << "Real Pressure: " << getRealRegPressure().getVGPRNum() << "\n");
-          // LLVM_DEBUG(dbgs() << "After: BB Begin to RegionBegin distance " << std::distance(BB->begin(), RegionBegin) <<"\n");
-          // LLVM_DEBUG(dbgs() << "After: Region Begin to BB end distance " << std::distance(RegionBegin, BB->end()) <<"\n");
-          // temporary return a better sched
-          // return bestAPRP;
+          timeLimit = static_cast<unsigned>((now - start).count() * 1.25) + 3000;
         } //else {
         currentScheduledInstructions.pop_back();
         --RegionEnd;
@@ -586,7 +495,6 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
       }
       // availableNodeStack.top().erase(s);
       readyNodeStack.emplace(availableNodeStack.top());
-      LLVM_DEBUG(dbgs() << "Adding to readyNodeStack.  New size: " << readyNodeStack.size() << "\n");
       // still promising, add successors to ready queue (not sure if this is best/right way to proceed)
       std::set<SUnit*> toAdd;
       for (auto dep: s->Succs)
@@ -599,24 +507,12 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
             hasSched = false;
           }
         }
-        LLVM_DEBUG(dumpReadyNodeStack(readyNodeStack.top()));
         if (hasSched){
           // assert (find(readyNodeStack.top().begin(), readyNodeStack.top().end(), succ) == readyNodeStack.top().end());
           toAdd.insert(succ);
           // readyNodeStack.top().push(succ);
           // availableNodeStack.top().push_back(succ);
 
-          LLVM_DEBUG(dbgs() << "Adding instruction to stack: " << *succ->getInstr() << "\n");
-          for (auto pred_dep : succ -> Preds) {
-            LLVM_DEBUG(dbgs() << "Pred: " << *pred_dep.getSUnit()->getInstr() << "\n");
-          }
-
-          LLVM_DEBUG(dbgs() << "Begin current schedule");
-          for (auto currentInst: currentScheduledInstructions)
-          {
-            LLVM_DEBUG(dbgs() << *currentInst->getInstr());
-          }
-          LLVM_DEBUG(dbgs() << "End current schedule");
         }
       }
       for(auto s : toAdd) {
@@ -628,12 +524,10 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
       RegionEnd --;
       trackerStack.pop();
       currentScheduledInstructions.pop_back();
-      LLVM_DEBUG(dbgs() << "Check node failed - going back!\n");
     }
   }
 
   milliseconds now = duration_cast< milliseconds >( system_clock::now().time_since_epoch());
-  LLVM_DEBUG(dbgs() << "After enumerate while loop.  Time passed = " << (now - start).count() << "\n");
 
   if(!timeLimitReached) {
     LLVM_DEBUG(dbgs() << "Searched the entire decision tree\n");
@@ -642,11 +536,6 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   if (!foundBetterSchedule)
   {
     LLVM_DEBUG(dbgs() << "Didn't find better schedule - putting back the original.\n");
-    //LLVM_DEBUG(dbgs() << "Original Region Begin: " << &RegionBeginClone << "\n");
-    //LLVM_DEBUG(dbgs() << "Current Region Begin: " << &RegionBegin << "\n");
-    LLVM_DEBUG(dbgs() << std::distance(RegionBegin, RegionBeginClone) <<"\n");
-    LLVM_DEBUG(dbgs() << "After: BB Begin to RegionBegin distance " << std::distance(BB->begin(), RegionBegin) <<"\n");
-    LLVM_DEBUG(dbgs() << "After: Region Begin to BB end distance " << std::distance(RegionBegin, BB->end()) <<"\n");
     RegionEnd = RegionBegin;
     for (MachineInstr *MI : currentSched) {
       LiveIntervals l;
@@ -655,6 +544,7 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
     }
     return bestAPRP;
   } else {
+    LLVM_DEBUG(dbgs() << "Found better schedule - scheduling.\n");
     RegionEnd = RegionBegin;
     for (SUnit *su : bestScheduledInstructions) {
       LiveIntervals l;
@@ -708,9 +598,9 @@ unsigned GCNScheduleDAGMILive::checkNode(SUnit* node, const std::map<int, SUnit*
   static std::map<std::vector<MachineInstr*>, unsigned> historyMap;
   auto historyIter = historyMap.find(history);
   if(historyIter != historyMap.end()) {
-    LLVM_DEBUG(dbgs() << "Find entry in history table. APRP: " << historyIter->second << "\n");
+    // LLVM_DEBUG(dbgs() << "Find entry in history table. APRP: " << historyIter->second << "\n");
     if(historyIter->second <= aprp) {
-      LLVM_DEBUG(dbgs() << "Pruned based on history table. Current APRP: " << aprp << "\n.");
+      // LLVM_DEBUG(dbgs() << "Pruned based on history table. Current APRP: " << aprp << "\n.");
       return UINT_MAX;
     } else {
       historyIter->second = aprp;
@@ -774,12 +664,6 @@ void GCNScheduleDAGMILive::schedule() {
   if (LIS) {
     PressureBefore = Pressure[RegionIdx];
 
-    LLVM_DEBUG(dbgs() << "Pressure before scheduling:\nRegion live-ins:";
-               GCNRPTracker::printLiveRegs(dbgs(), LiveIns[RegionIdx], MRI);
-               dbgs() << "Region live-in pressure:  ";
-               llvm::getRegPressure(MRI, LiveIns[RegionIdx]).print(dbgs());
-               dbgs() << "Region register pressure: ";
-               PressureBefore.print(dbgs()));
   }
 
   ScheduleDAGMILive::schedule();
@@ -808,10 +692,6 @@ void GCNScheduleDAGMILive::schedule() {
   auto PressureAfterOccupancyPass = getRealRegPressure();
   LLVM_DEBUG(dbgs() << "Pressure after occupancy pass scheduling: ";
              PressureAfterOccupancyPass.print(dbgs()));
-  if(PressureAfterOccupancyPass.getVGPRNum() < PressureAfter.getVGPRNum()) {
-    LLVM_DEBUG(dbgs() << "@: pressure after is lower than pressure before!\n");
-  }
-  //exit(1); // TODO: take this out
 
   unsigned Occ = MFI.getOccupancy();
   //unsigned WavesAfterHeuristic = std::min(Occ, PressureAfter.getOccupancy(ST));
@@ -822,9 +702,6 @@ void GCNScheduleDAGMILive::schedule() {
 
   LLVM_DEBUG(dbgs() << "Occupancy before occupancy pass: " << WavesAfterHeuristic << ", after " << WavesAfterOccupancyPass << ".\n");
 
-  if(WavesAfterOccupancyPass > WavesAfterHeuristic) {
-      LLVM_DEBUG(dbgs() << "@@@ Occupancy improved!\n");
-  }
   // if (PressureAfter.getSGPRNum() <= S.SGPRCriticalLimit &&
   //     PressureAfter.getVGPRNum() <= S.VGPRCriticalLimit) {
     Pressure[RegionIdx] = PressureAfterOccupancyPass;
@@ -1008,9 +885,6 @@ void GCNScheduleDAGMILive::finalizeSchedule() {
      * 3) For each region call schedule() (should be done via copy/pasta-ed loop)
      *  - This should run ILP pass
      */
-  LLVM_DEBUG(dbgs() << "Calling our finalizeSchedule.\n");
-  LLVM_DEBUG(dbgs() << "All regions recorded, starting actual scheduling.\n");
-  
   GCNMaxOccupancySchedStrategy &S = (GCNMaxOccupancySchedStrategy&)*SchedImpl;
   
   LiveIns.resize(Regions.size());
@@ -1040,18 +914,11 @@ void GCNScheduleDAGMILive::finalizeSchedule() {
       if (Stage == UnclusteredReschedule) {
         if (RescheduleRegions.none())
           continue;
-        LLVM_DEBUG(dbgs() <<
-          "Retrying function scheduling without clustering.\n");
       }
 
       if (Stage == ClusteredLowOccupancyReschedule) {
         if (StartingOccupancy <= MinOccupancy)
           break;
-
-        LLVM_DEBUG(
-            dbgs()
-            << "Retrying function scheduling with lowest recorded occupancy "
-            << MinOccupancy << ".\n");
 
         S.setTargetOccupancy(MinOccupancy);
       }
@@ -1086,15 +953,10 @@ void GCNScheduleDAGMILive::finalizeSchedule() {
         continue;
       }
 
-      LLVM_DEBUG(dbgs() << "********** MI Scheduling **********\n");
-      LLVM_DEBUG(dbgs() << MF.getName() << ":" << printMBBReference(*MBB) << " "
-                        << MBB->getName() << "\n  From: " << *begin()
-                        << "    To: ";
-                 if (RegionEnd != MBB->end()) dbgs() << *RegionEnd;
-                 else dbgs() << "End";
-                 dbgs() << " RegionInstrs: " << NumRegionInstrs << '\n');
-
+      LLVM_DEBUG(dbgs() << "------ Start New Region ------\n");
+      LLVM_DEBUG(dbgs() << "Instruction number: " + NumRegionInstrs + "\n");
       schedule();
+      LLVM_DEBUG(dbgs() << "------ End Region ------\n\n");
 
       exitRegion();
       ++RegionIdx;
@@ -1136,8 +998,6 @@ std::map<SUnit*, node*> GCNScheduleDAGMILive::setLatenciesToOne(SmallVector<llvm
         }
     }
 
-    LLVM_DEBUG(dbgs() << "mapSUnitToNode size: " << mapSUnitToNode.size() << "\n");
-
     visited.clear();
     for (auto it =  topRoots.begin(); it != topRoots.end(); ++it) {
         queue.push(*it);
@@ -1157,7 +1017,6 @@ std::map<SUnit*, node*> GCNScheduleDAGMILive::setLatenciesToOne(SmallVector<llvm
             node* succNode = mapSUnitToNode[succ];
 
             // set current node as successor's pred
-            LLVM_DEBUG(dbgs() << static_cast<void*>(succNode) << "\n");
             // LLVM_DEBUG(dbgs() << typeid(succNode->preds).name() << " " << typeid(succNode->predsLatencies).name() << " " << latency << "\n");
             succNode->preds.push_back(currentNode);
             succNode->predsLatencies.push_back(latency);
