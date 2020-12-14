@@ -463,7 +463,8 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   using std::chrono::duration_cast;
   using std::chrono::system_clock;
   
-  unsigned timeLimit = msPerInst * static_cast<unsigned>(schedLength);
+  //unsigned timeLimit = msPerInst * static_cast<unsigned>(schedLength);
+  unsigned timeLimit = 2000;
   LLVM_DEBUG(dbgs() << "Setting timeLimit: " <<  timeLimit << "\n");
   //std::duration<miliseconds> timeLimitDuration(timeLimit);
 
@@ -484,14 +485,12 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
   while (!readyNodeStack.empty()) // correct condition?
   {
     milliseconds now = duration_cast< milliseconds >( system_clock::now().time_since_epoch());
-    /*
     if (now - start > milliseconds(timeLimit))
     {
       timeLimitReached = true;
       LLVM_DEBUG(dbgs() << "Time limit reached!\n");
       break;
     }
-    */
     if (readyNodeStack.top().empty()) {
       LLVM_DEBUG(dbgs() << "Popping stack.\n");
       readyNodeStack.pop();
@@ -553,9 +552,12 @@ unsigned GCNScheduleDAGMILive::enumerate(SmallVector<SUnit*, 8> TopRoots, SmallV
           bestAPRP = regPressure;
           bestScheduledInstructions = currentScheduledInstructions;
           foundBetterSchedule = true;
-          LLVM_DEBUG(dbgs() << "Found a better schedule.\n");
+          //timeLimit = max((now-begin) *1.5, timeLimit);
+          timeLimit = static_cast<unsigned>((now - start).count() * 1.25) + 3000;
           milliseconds now = duration_cast< milliseconds >( system_clock::now().time_since_epoch());
+          LLVM_DEBUG(dbgs() << "Found a better schedule.\n");
           LLVM_DEBUG(dbgs() << "Time passed so far = " << (now - start).count() <<"\n");
+          LLVM_DEBUG(dbgs() << "New time limit = " << timeLimit <<"\n");
           // LLVM_DEBUG(dbgs() << "We found a better schedule! Don't bother to back track right now just return :)\n");
           LLVM_DEBUG(dbgs() << "LastRealMI: " << currentScheduledInstructions.back() -> getInstr() << "\n");
           LLVM_DEBUG(dbgs() << "LastCheckedMI: " <<   trackerStack.top().getLastTrackedMI() << "\n");
@@ -806,17 +808,19 @@ void GCNScheduleDAGMILive::schedule() {
   auto PressureAfterOccupancyPass = getRealRegPressure();
   LLVM_DEBUG(dbgs() << "Pressure after occupancy pass scheduling: ";
              PressureAfterOccupancyPass.print(dbgs()));
-  if(PressureAfterOccupancyPass.getVGPRNum() < PressureBefore.getVGPRNum()) {
+  if(PressureAfterOccupancyPass.getVGPRNum() < PressureAfter.getVGPRNum()) {
     LLVM_DEBUG(dbgs() << "@: pressure after is lower than pressure before!\n");
   }
-  exit(1); // TODO: take this out
+  //exit(1); // TODO: take this out
 
   unsigned Occ = MFI.getOccupancy();
-  unsigned WavesAfterHeuristic = std::min(Occ, PressureAfter.getOccupancy(ST));
-  unsigned WavesAfterOccupancyPass = std::min(Occ, PressureAfterOccupancyPass.getOccupancy(ST));
+  //unsigned WavesAfterHeuristic = std::min(Occ, PressureAfter.getOccupancy(ST));
+  //unsigned WavesAfterOccupancyPass = std::min(Occ, PressureAfterOccupancyPass.getOccupancy(ST));
+
+  unsigned WavesAfterHeuristic = PressureAfter.getOccupancy(ST);
+  unsigned WavesAfterOccupancyPass = PressureAfterOccupancyPass.getOccupancy(ST);
 
   LLVM_DEBUG(dbgs() << "Occupancy before occupancy pass: " << WavesAfterHeuristic << ", after " << WavesAfterOccupancyPass << ".\n");
-
 
   if(WavesAfterOccupancyPass > WavesAfterHeuristic) {
       LLVM_DEBUG(dbgs() << "@@@ Occupancy improved!\n");

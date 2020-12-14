@@ -485,7 +485,7 @@ unsigned getVGPREncodingGranule(const MCSubtargetInfo *STI,
 }
 
 unsigned getTotalNumVGPRs(const MCSubtargetInfo *STI) {
-  if (!isGFX10(*STI))
+  //if (!isGFX10(*STI))
     return 256;
   return STI->getFeatureBits().test(FeatureWavefrontSize32) ? 1024 : 512;
 }

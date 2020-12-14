@@ -631,6 +631,8 @@ unsigned GCNSubtarget::getOccupancyWithNumVGPRs(unsigned VGPRs) const {
   if (VGPRs < Granule)
     return MaxWaves;
   unsigned RoundedRegs = ((VGPRs + Granule - 1) / Granule) * Granule;
+  LLVM_DEBUG(dbgs() << "VPGRs: " << VGPRs << " , Granule: " << Granule << ", RoundedRegs: " << RoundedRegs << "\n");
+  LLVM_DEBUG(dbgs() << "Total num vgprs: " << getTotalNumVGPRs() << " max waves: " << MaxWaves << "\n");
   return std::min(std::max(getTotalNumVGPRs() / RoundedRegs, 1u), MaxWaves);
 }
 
