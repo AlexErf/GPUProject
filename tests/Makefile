@@ -23,4 +23,4 @@ main.exe: main.o
 	$(CXX) -o $@ -c $<
 
 clean:
-	rm -rf *.exe *.o *.bc
+	rm -rf *.exe *.o *.bc *.cl_exe

@@ -954,7 +954,6 @@ void GCNScheduleDAGMILive::finalizeSchedule() {
       }
 
       LLVM_DEBUG(dbgs() << "------ Start New Region ------\n");
-      LLVM_DEBUG(dbgs() << "Instruction number: " + NumRegionInstrs + "\n");
       schedule();
       LLVM_DEBUG(dbgs() << "------ End Region ------\n\n");
 
