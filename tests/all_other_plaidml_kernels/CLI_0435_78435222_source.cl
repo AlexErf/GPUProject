@@ -1,0 +1,52 @@
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+#pragma OPENCL EXTENSION cl_khr_fp64 : enable
+// gid: 1792 7 1
+// lid: 256 1 1
+// Names: { i1, i2, i3, i4 }
+// Ranges: { 1, 7, 7, 928 }
+// Out stride: { 45472, 6496, 928, 1 }
+// Elementwise input X_T1500 shape: fp32(1, 7, 7, 928):(45472, 6496, 928, 1):177.625 KiB
+// Elementwise input X_T1504 shape: fp32(928):(1):3.625 KiB
+// Elementwise input X_I_581 shape: fp32(928):(1):3.625 KiB
+// Elementwise op: [[pid(TrueDiv)]] X_T1505 = div(X_T1500, X_T1504)
+// Elementwise op: [[pid(Add, Switch)]] X_T1506 = add(X_T1505, X_I_581)
+// Elementwise op: X_T1507 = cmp_lt(X_T1506, X_T2)
+// Elementwise op: [[pid(Relu)]] X_T1508 = cond(X_T1507, X_T2, X_T1506)
+// Tile size: { 1, 1, 1, 928 }
+// Contraction output var shape: fp32(1, 7, 7, 928):(45472, 6496, 928, 1):177.625 KiB
+// Computed true ops: 181888
+// Computed work groups: 49
+// Computed inner loops: 1
+// Computed shared mem: 0
+// Computed out regs: 4096
+// Computed mem read: 348
+// Computed mem write: 3712
+// Computed operations: 256
+// Computed rollups: 0
+// Computed threads used: 256
+// lwork = 256, 1, 1
+// gwork = 1792, 7, 1
+__kernel void kernel_c68_sdk_521(__global float* restrict  X_T1508, __global const float* restrict  X_T1500, __global const float* restrict  X_T1504, __global const float* restrict  X_I_581)
+{
+  int tid = get_local_id(0);
+  int i3_gid = get_group_id(0);
+  int i2_gid = get_group_id(1);
+  int i4_tid = (tid % 256);
+  for (int i4_lid = 0; i4_lid < 4; i4_lid += 1)
+  {
+    int i4_cond = ((i4_lid < 3) || (i4_tid < 160));
+    if (i4_cond)
+    {
+      int i4 = ((256 * i4_lid) + i4_tid);
+      int gout_idx = (((6496 * i2_gid) + (928 * i3_gid)) + i4);
+      float LX_T1500 = X_T1500[gout_idx];
+      float LX_T1504 = X_T1504[i4];
+      float LX_I_581 = X_I_581[i4];
+      float LX_T1505 = (LX_T1500 / LX_T1504);
+      float LX_T1506 = (LX_T1505 + LX_I_581);
+      int LX_T1507 = (LX_T1506 < 0.0f);
+      float LX_T1508 = select((float)LX_T1506, (float)0.0f, (int)LX_T1507);
+      X_T1508[gout_idx] = LX_T1508;
+    }
+  }
+}
